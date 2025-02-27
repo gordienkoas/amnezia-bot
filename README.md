@@ -43,7 +43,7 @@
 5. Загрузите и запустите скрипт `install.sh`, с помощью которого будет автоматически установлен бот, со всеми зависимостями, в том числе, в качестве системной службы (автозапуск):
 
     ```bash
-    curl -O https://raw.githubusercontent.com/JB-SelfCompany/awg-docker-bot/main/install.sh && chmod +x install.sh && ./install.sh
+    curl -O https://raw.githubusercontent.com/stevefoxru/amnezia-bot/main/install.sh && chmod +x install.sh && ./install.sh
     ```
 
 ## Запуск
