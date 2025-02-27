@@ -8,7 +8,7 @@ RED=$'\033[0;31m'
 BLUE=$'\033[0;34m'
 NC=$'\033[0m'
 
-ENABLE_LOGS=false
+ENABLE_LOGS=true
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT_NAME="$(basename "$0")"
@@ -110,40 +110,36 @@ check_updates() {
     if [[ "$changes" == "Already up to date." ]]; then
         echo -e "${GREEN}Обновления не требуются${NC}\n"
     elif [[ -n "$changes" ]]; then
-        echo -e "${GREEN}Обновления установлены:${NC}"
+        echo -e "${YELLOW}Обнаружены обновления:${NC}"
         echo "$changes"
         echo
-        read -p "Требуется перезапустить службу для применения обновлений. Перезапустить? (y/n): " restart
-        if [[ "$restart" =~ ^[Yy]$ ]]; then
-            run_with_spinner "Перезапуск службы" "sudo systemctl restart $SERVICE_NAME -qq"
-            echo -e "${GREEN}Служба перезапущена${NC}\n"
-        else
-            echo -e "${YELLOW}Для применения обновлений требуется перезапустить службу${NC}\n"
-        fi
+        echo -e "${GREEN}1${NC}. Установить обновления"
+        echo -e "${YELLOW}2${NC}. Отменить"
+        
+        echo -ne "\n${BLUE}Выберите действие:${NC} "
+        read action
+        
+        case $action in
+            1)
+                echo -e "\n${GREEN}Установка обновлений...${NC}"
+                git pull
+                run_with_spinner "Перезапуск службы" "sudo systemctl restart $SERVICE_NAME -qq"
+                echo -e "${GREEN}Обновления установлены и применены${NC}\n"
+                ;;
+            2)
+                echo -e "${YELLOW}Установка обновлений отменена${NC}\n"
+                return 0
+                ;;
+            *)
+                echo -e "${RED}Некорректный ввод${NC}\n"
+                return 1
+                ;;
+        esac
     else
         echo -e "${RED}Неожиданный ответ при проверке обновлений${NC}\n"
     fi
 }
 
-remove_amneziawg() {
-    echo -e "\n${YELLOW}Внимание: Это действие удалит AmneziaWG и связанные данные. Продолжить? (y/n)${NC}"
-    read confirm
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        # Остановка службы, если она активна
-        systemctl is-active --quiet "$SERVICE_NAME" && run_with_spinner "Остановка службы" "sudo systemctl stop $SERVICE_NAME -qq"
-        
-        # Удаление Docker контейнеров и образов, связанных с AmneziaWG (предполагается использование Docker)
-        run_with_spinner "Удаление Docker контейнеров AmneziaWG" "docker ps -a -q -f name=amneziawg | xargs -r docker rm -f"
-        run_with_spinner "Удаление Docker образов AmneziaWG" "docker images -q amneziawg/amneziawg | uniq | xargs -r docker rmi -f"
-        
-        # Удаление конфигурационных файлов (предполагается, что они в директории awg/files)
-        run_with_spinner "Удаление конфигураций AmneziaWG" "rm -rf $(pwd)/awg/files"
-        
-        echo -e "${GREEN}AmneziaWG успешно удален${NC}"
-    else
-        echo -e "${YELLOW}Удаление отменено${NC}"
-    fi
-}
 
 service_control_menu() {
     while true; do
@@ -153,8 +149,7 @@ service_control_menu() {
         echo -e "${GREEN}2${NC}. Перезапустить службу"
         echo -e "${GREEN}3${NC}. Переустановить службу"
         echo -e "${RED}4${NC}. Удалить службу"
-        echo -e "${GREEN}5${NC}. Удалить AmneziaWG"
-        echo -e "${YELLOW}6${NC}. Назад"
+        echo -e "${YELLOW}5${NC}. Назад"
         
         echo -ne "\n${BLUE}Выберите действие:${NC} "
         read action
@@ -163,31 +158,10 @@ service_control_menu() {
             2) run_with_spinner "Перезапуск службы" "sudo systemctl restart $SERVICE_NAME -qq" ;;
             3) create_service ;;
             4) run_with_spinner "Удаление службы" "sudo systemctl stop $SERVICE_NAME -qq && sudo systemctl disable $SERVICE_NAME -qq && sudo rm /etc/systemd/system/$SERVICE_NAME.service && sudo systemctl daemon-reload -qq" ;;
-            5) remove_amneziawg ;;
-            6) return 0 ;;
+            5) return 0 ;;
             *) echo -e "${RED}Некорректный ввод${NC}" ;;
         esac
     done
-}
-
-reinstall_bot() {
-    echo -e "\n${YELLOW}Внимание: Переустановка бота удалит текущие настройки и данные. Продолжить? (y/n)${NC}"
-    read confirm
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        # Остановка и удаление службы, если она существует
-        systemctl is-active --quiet "$SERVICE_NAME" && run_with_spinner "Остановка службы" "sudo systemctl stop $SERVICE_NAME -qq"
-        systemctl list-units --type=service --all | grep -q "$SERVICE_NAME.service" && run_with_spinner "Удаление службы" "sudo systemctl disable $SERVICE_NAME -qq && sudo rm /etc/systemd/system/$SERVICE_NAME.service && sudo systemctl daemon-reload -qq"
-        
-        # Удаление старых файлов бота
-        run_with_spinner "Удаление старых файлов" "rm -rf python_bot_amnezia"
-        
-        # Запуск полной установки заново
-        install_bot
-        
-        echo -e "${GREEN}Бот успешно переустановлен${NC}"
-    else
-        echo -e "${YELLOW}Переустановка отменена${NC}"
-    fi
 }
 
 installed_menu() {
@@ -195,16 +169,14 @@ installed_menu() {
         echo -e "\n${BLUE}=== AWG Docker Telegram Bot ===${NC}"
         echo -e "${GREEN}1${NC}. Проверить обновления"
         echo -e "${GREEN}2${NC}. Управление службой"
-        echo -e "${GREEN}3${NC}. Переустановить бота"
-        echo -e "${YELLOW}4${NC}. Выход"
+        echo -e "${YELLOW}3${NC}. Выход"
         
         echo -ne "\n${BLUE}Выберите действие:${NC} "
         read action
         case $action in
             1) check_updates ;;
             2) service_control_menu ;;
-            3) reinstall_bot ;;
-            4) exit 0 ;;
+            3) exit 0 ;;
             *) echo -e "${RED}Некорректный ввод${NC}" ;;
         esac
     done
@@ -253,7 +225,7 @@ check_python() {
 }
 
 install_dependencies() {
-    run_with_spinner "Установка зависимостей" "sudo apt-get install qrencode jq net-tools iptables resolvconf git -y -qq"
+    run_with_spinner "Установка зависимостей" "sudo apt-get install jq net-tools iptables resolvconf git -y -qq"
 }
 
 install_and_configure_needrestart() {
@@ -263,14 +235,14 @@ install_and_configure_needrestart() {
 }
 
 clone_repository() {
-    if [[ -d "awg_bot" ]]; then
+    if [[ -d "awg-docker-bot" ]]; then
         echo -e "\n${YELLOW}Репозиторий существует${NC}"
-        cd awg_bot || { echo -e "\n${RED}Ошибка перехода в директорию${NC}"; exit 1; }
+        cd awg-docker-bot || { echo -e "\n${RED}Ошибка перехода в директорию${NC}"; exit 1; }
         return 0
     fi
     
-    run_with_spinner "Клонирование репозитория" "git clone https://github.com/JB-SelfCompany/awg_bot.git >/dev/null 2>&1"
-    cd awg_bot || { echo -e "\n${RED}Ошибка перехода в директорию${NC}"; exit 1; }
+    run_with_spinner "Клонирование репозитория" "git clone https://github.com/JB-SelfCompany/awg-docker-bot.git >/dev/null 2>&1"
+    cd awg-docker-bot || { echo -e "\n${RED}Ошибка перехода в директорию${NC}"; exit 1; }
 }
 
 setup_venv() {
@@ -308,7 +280,7 @@ initialize_bot() {
 create_service() {
     cat > /tmp/service_file << EOF
 [Unit]
-Description=AmneziaWG Telegram Bot
+Description=AmneziaVPN Docker Telegram Bot
 After=network.target
 
 [Service]
