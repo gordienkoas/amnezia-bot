@@ -140,6 +140,25 @@ check_updates() {
     fi
 }
 
+remove_amneziawg() {
+    echo -e "\n${YELLOW}Внимание: Это действие удалит AmneziaWG и связанные данные. Продолжить? (y/n)${NC}"
+    read confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        # Остановка службы, если она активна
+        systemctl is-active --quiet "$SERVICE_NAME" && run_with_spinner "Остановка службы" "sudo systemctl stop $SERVICE_NAME -qq"
+        
+        # Удаление Docker контейнеров и образов, связанных с AmneziaWG (предполагается использование Docker)
+        run_with_spinner "Удаление Docker контейнеров AmneziaWG" "docker ps -a -q -f name=amneziawg | xargs -r docker rm -f"
+        run_with_spinner "Удаление Docker образов AmneziaWG" "docker images -q amneziawg/amneziawg | uniq | xargs -r docker rmi -f"
+        
+        # Удаление конфигурационных файлов (предполагается, что они в директории awg/files)
+        run_with_spinner "Удаление конфигураций AmneziaWG" "rm -rf $(pwd)/awg/files"
+        
+        echo -e "${GREEN}AmneziaWG успешно удален${NC}"
+    else
+        echo -e "${YELLOW}Удаление отменено${NC}"
+    fi
+}
 
 service_control_menu() {
     while true; do
@@ -149,6 +168,7 @@ service_control_menu() {
         echo -e "${GREEN}2${NC}. Перезапустить службу"
         echo -e "${GREEN}3${NC}. Переустановить службу"
         echo -e "${RED}4${NC}. Удалить службу"
+        echo -e "${GREEN}5${NC}. Удалить AmneziaWG"
         echo -e "${YELLOW}5${NC}. Назад"
         
         echo -ne "\n${BLUE}Выберите действие:${NC} "
@@ -158,10 +178,31 @@ service_control_menu() {
             2) run_with_spinner "Перезапуск службы" "sudo systemctl restart $SERVICE_NAME -qq" ;;
             3) create_service ;;
             4) run_with_spinner "Удаление службы" "sudo systemctl stop $SERVICE_NAME -qq && sudo systemctl disable $SERVICE_NAME -qq && sudo rm /etc/systemd/system/$SERVICE_NAME.service && sudo systemctl daemon-reload -qq" ;;
-            5) return 0 ;;
+            5) remove_amneziawg ;;
+            6) return 0 ;;
             *) echo -e "${RED}Некорректный ввод${NC}" ;;
         esac
     done
+}
+
+reinstall_bot() {
+    echo -e "\n${YELLOW}Внимание: Переустановка бота удалит текущие настройки и данные. Продолжить? (y/n)${NC}"
+    read confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        # Остановка и удаление службы, если она существует
+        systemctl is-active --quiet "$SERVICE_NAME" && run_with_spinner "Остановка службы" "sudo systemctl stop $SERVICE_NAME -qq"
+        systemctl list-units --type=service --all | grep -q "$SERVICE_NAME.service" && run_with_spinner "Удаление службы" "sudo systemctl disable $SERVICE_NAME -qq && sudo rm /etc/systemd/system/$SERVICE_NAME.service && sudo systemctl daemon-reload -qq"
+        
+        # Удаление старых файлов бота
+        run_with_spinner "Удаление старых файлов" "rm -rf python_bot_amnezia"
+        
+        # Запуск полной установки заново
+        install_bot
+        
+        echo -e "${GREEN}Бот успешно переустановлен${NC}"
+    else
+        echo -e "${YELLOW}Переустановка отменена${NC}"
+    fi
 }
 
 installed_menu() {
@@ -169,6 +210,7 @@ installed_menu() {
         echo -e "\n${BLUE}=== AWG Docker Telegram Bot ===${NC}"
         echo -e "${GREEN}1${NC}. Проверить обновления"
         echo -e "${GREEN}2${NC}. Управление службой"
+        echo -e "${GREEN}3${NC}. Переустановить бота"
         echo -e "${YELLOW}3${NC}. Выход"
         
         echo -ne "\n${BLUE}Выберите действие:${NC} "
@@ -176,7 +218,8 @@ installed_menu() {
         case $action in
             1) check_updates ;;
             2) service_control_menu ;;
-            3) exit 0 ;;
+            3) reinstall_bot ;;
+            4) exit 0 ;;
             *) echo -e "${RED}Некорректный ввод${NC}" ;;
         esac
     done
