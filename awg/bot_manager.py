@@ -75,7 +75,8 @@ main_menu_markup = InlineKeyboardMarkup(row_width=1).add(
     InlineKeyboardButton("Получить конфигурацию пользователя", callback_data="get_config"),
     InlineKeyboardButton("Список клиентов", callback_data="list_users"),
     InlineKeyboardButton("Создать бекап", callback_data="create_backup"),
-    InlineKeyboardButton("Список админов", callback_data="list_admins")  # Новая кнопка
+    InlineKeyboardButton("Список админов", callback_data="list_admins"),
+    InlineKeyboardButton("Добавить администратора", callback_data="add_admin")  # Новая кнопка
 )
 
 user_main_messages = {}
@@ -266,6 +267,7 @@ async def handle_messages(message: types.Message):
         return
     user_state = user_main_messages.get(message.from_user.id, {}).get('state')
     if user_state == 'waiting_for_user_name':
+        # Существующий код для добавления пользователя
         user_name = message.text.strip()
         if not all(c.isalnum() or c in "-_" for c in user_name):
             await message.reply("Имя пользователя может содержать только буквы, цифры, дефисы и подчёркивания.")
@@ -294,9 +296,65 @@ async def handle_messages(message: types.Message):
             )
         else:
             await message.answer("Ошибка: главное сообщение не найдено.")
+    elif user_state == 'waiting_for_admin_id':
+        try:
+            new_admin_id = int(message.text.strip())
+            if new_admin_id in admins:
+                await message.reply(f"Пользователь {new_admin_id} уже является администратором.")
+                asyncio.create_task(delete_message_after_delay(message.chat.id, message.message_id, delay=2))
+                return
+            db.add_admin(new_admin_id)
+            admins.append(new_admin_id)
+            await message.reply(f"Пользователь {new_admin_id} добавлен в администраторы.")
+            await bot.send_message(new_admin_id, "Вы были назначены администратором бота!")
+            logger.info(f"Админ {message.from_user.id} добавил администратора {new_admin_id} через интерфейс")
+            
+            # Возвращаем главное меню
+            main_chat_id = user_main_messages[message.from_user.id].get('chat_id')
+            main_message_id = user_main_messages[message.from_user.id].get('message_id')
+            if main_chat_id and main_message_id:
+                user_main_messages[message.from_user.id]['state'] = None
+                await bot.edit_message_text(
+                    chat_id=main_chat_id,
+                    message_id=main_message_id,
+                    text="Выберите действие:",
+                    reply_markup=main_menu_markup
+                )
+        except ValueError:
+            await message.reply("Пожалуйста, введите корректный Telegram ID (число).")
+            asyncio.create_task(delete_message_after_delay(message.chat.id, message.message_id, delay=2))
+            return
+        except Exception as e:
+            logger.error(f"Ошибка при добавлении администратора: {e}")
+            await message.reply("Произошла ошибка при добавлении администратора.")
+            asyncio.create_task(delete_message_after_delay(message.chat.id, message.message_id, delay=2))
     else:
         await message.reply("Неизвестная команда или действие.")
         asyncio.create_task(delete_message_after_delay(message.chat.id, message.message_id, delay=2))
+
+
+
+@dp.callback_query_handler(lambda c: c.data == "add_admin")
+async def prompt_for_admin_id(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id not in admins:
+        await callback_query.answer("У вас нет прав для выполнения этого действия.", show_alert=True)
+        return
+    
+    main_chat_id = user_main_messages.get(callback_query.from_user.id, {}).get('chat_id')
+    main_message_id = user_main_messages.get(callback_query.from_user.id, {}).get('message_id')
+    if main_chat_id and main_message_id:
+        await bot.edit_message_text(
+            chat_id=main_chat_id,
+            message_id=main_message_id,
+            text="Введите Telegram ID нового администратора:",
+            reply_markup=InlineKeyboardMarkup().add(
+                InlineKeyboardButton("Домой", callback_data="home")
+            )
+        )
+        user_main_messages[callback_query.from_user.id]['state'] = 'waiting_for_admin_id'
+    else:
+        await callback_query.answer("Ошибка: главное сообщение не найдено.", show_alert=True)
+    await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data.startswith('add_user'))
 async def prompt_for_user_name(callback_query: types.CallbackQuery):
@@ -665,13 +723,15 @@ async def list_admins_callback(callback_query: types.CallbackQuery):
         return
     admin_list = "\n".join([f"- {admin_id}" for admin_id in admins])
     text = f"Список администраторов:\n{admin_list}"
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    for admin_id in admins:
+        keyboard.insert(InlineKeyboardButton(f"Удалить {admin_id}", callback_data=f"remove_admin_{admin_id}"))
+    keyboard.add(InlineKeyboardButton("Домой", callback_data="home"))
     await bot.edit_message_text(
         chat_id=callback_query.message.chat.id,
         message_id=callback_query.message.message_id,
         text=text,
-        reply_markup=InlineKeyboardMarkup().add(
-            InlineKeyboardButton("Домой", callback_data="home")
-        )
+        reply_markup=keyboard
     )
     await callback_query.answer()
 
