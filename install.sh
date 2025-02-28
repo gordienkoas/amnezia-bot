@@ -148,8 +148,8 @@ remove_amneziawg() {
         systemctl is-active --quiet "$SERVICE_NAME" && run_with_spinner "Остановка службы" "sudo systemctl stop $SERVICE_NAME -qq"
         
         # Удаление Docker контейнеров и образов, связанных с AmneziaWG (предполагается использование Docker)
-        run_with_spinner "Удаление Docker контейнеров AmneziaWG" "docker ps -a -q -f name=amneziawg | xargs -r docker rm -f"
-        run_with_spinner "Удаление Docker образов AmneziaWG" "docker images -q amneziawg/amneziawg | uniq | xargs -r docker rmi -f"
+        run_with_spinner "Удаление Docker контейнеров AmneziaWG" "docker ps -a -q -f name=amnezia-wg | xargs -r docker rm -f"
+        run_with_spinner "Удаление Docker образов AmneziaWG" "docker images -q amneziawg/amnezia-wg | uniq | xargs -r docker rmi -f"
         
         # Удаление конфигурационных файлов (предполагается, что они в директории awg/files)
         run_with_spinner "Удаление конфигураций AmneziaWG" "rm -rf $(pwd)/awg/files"
@@ -194,7 +194,7 @@ reinstall_bot() {
         systemctl list-units --type=service --all | grep -q "$SERVICE_NAME.service" && run_with_spinner "Удаление службы" "sudo systemctl disable $SERVICE_NAME -qq && sudo rm /etc/systemd/system/$SERVICE_NAME.service && sudo systemctl daemon-reload -qq"
         
         # Удаление старых файлов бота
-        run_with_spinner "Удаление старых файлов" "rm -rf python_bot_amnezia"
+        run_with_spinner "Удаление старых файлов" "rm -rf awg-docker-bot"
         
         # Запуск полной установки заново
         install_bot
@@ -211,7 +211,7 @@ installed_menu() {
         echo -e "${GREEN}1${NC}. Проверить обновления"
         echo -e "${GREEN}2${NC}. Управление службой"
         echo -e "${GREEN}3${NC}. Переустановить бота"
-        echo -e "${YELLOW}3${NC}. Выход"
+        echo -e "${YELLOW}4${NC}. Выход"
         
         echo -ne "\n${BLUE}Выберите действие:${NC} "
         read action
