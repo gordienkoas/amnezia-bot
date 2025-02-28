@@ -10,6 +10,7 @@ from datetime import datetime
 
 EXPIRATIONS_FILE = 'files/expirations.json'
 PAYMENTS_FILE = 'files/payments.json'
+ADMINS_FILE = 'files/admins.json'  # Новый файл для хранения админов
 UTC = pytz.UTC
 
 logging.basicConfig(level=logging.INFO)
@@ -34,7 +35,8 @@ def create_config(path='files/setting.ini'):
     config.add_section("setting")
 
     bot_token = input('Введите токен Telegram бота: ').strip()
-    admin_id = input('Введите Telegram ID администратора: ').strip()
+    admin_ids_input = input('Введите Telegram ID администраторов через запятую (например, 12345, 67890): ').strip()
+    admin_ids = [admin_id.strip() for admin_id in admin_ids_input.split(',')]  # Список ID
 
     docker_container = get_amnezia_container()
     logger.info(f"Найден Docker-контейнер: {docker_container}")
@@ -43,7 +45,7 @@ def create_config(path='files/setting.ini'):
     try:
         wg_config_file = subprocess.check_output(cmd, shell=True).decode().strip()
         if not wg_config_file:
-            logger.warning("Не удалось найти файл конфигурации WireGuard 'wg0.conf' в контейнере. Используется путь по умолчанию.")
+            logger.warning("Не удалось найти файл конфигурации WireGuard 'wg0.conf'. Используется путь по умолчанию.")
             wg_config_file = '/opt/amnezia/awg/wg0.conf'
     except subprocess.CalledProcessError:
         logger.warning("Ошибка при определении пути к файлу конфигурации WireGuard. Используется путь по умолчанию.")
@@ -54,10 +56,10 @@ def create_config(path='files/setting.ini'):
         socket.inet_aton(endpoint)
     except (subprocess.CalledProcessError, socket.error):
         logger.error("Ошибка при определении внешнего IP-адреса сервера.")
-        endpoint = input('Не удалось автоматически определить внешний IP-адрес. Пожалуйста, введите его вручную: ').strip()
+        endpoint = input('Не удалось автоматически определить внешний IP-адрес. Введите его вручную: ').strip()
 
     config.set("setting", "bot_token", bot_token)
-    config.set("setting", "admin_id", admin_id)
+    config.set("setting", "admin_ids", ','.join(admin_ids))  # Сохраняем как строку с разделителем
     config.set("setting", "docker_container", docker_container)
     config.set("setting", "wg_config_file", wg_config_file)
     config.set("setting", "endpoint", endpoint)
@@ -65,6 +67,9 @@ def create_config(path='files/setting.ini'):
     with open(path, "w") as config_file:
         config.write(config_file)
     logger.info(f"Конфигурация сохранена в {path}")
+
+    # Инициализируем admins.json с начальными администраторами
+    save_admins(admin_ids)
 
 def ensure_peer_names():
     setting = get_config()
@@ -149,8 +154,10 @@ def get_config(path='files/setting.ini'):
     config.read(path)
     out = {}
     for key in config['setting']:
-        out[key] = config['setting'][key]
-
+        if key == 'admin_ids':
+            out[key] = config['setting'][key].split(',')  # Парсим строку в список
+        else:
+            out[key] = config['setting'][key]
     return out
 
 def save_client_endpoint(username, endpoint):
@@ -428,4 +435,40 @@ def get_user_payments(user_id: int):
     return payments.get(str(user_id), [])
 
 def get_all_payments():
-    return load_payments()
+    payments = load_payments()
+    flat_payments = []
+    for user_id, user_payments in payments.items():
+        flat_payments.extend(user_payments)
+    return flat_payments
+
+# Методы для управления администраторами
+def load_admins():
+    os.makedirs(os.path.dirname(ADMINS_FILE), exist_ok=True)
+    if not os.path.exists(ADMINS_FILE):
+        return []
+    with open(ADMINS_FILE, 'r') as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            logger.error("Ошибка при загрузке admins.json.")
+            return []
+
+def save_admins(admin_ids):
+    os.makedirs(os.path.dirname(ADMINS_FILE), exist_ok=True)
+    with open(ADMINS_FILE, 'w') as f:
+        json.dump(admin_ids, f)
+
+def get_admins():
+    return load_admins()
+
+def add_admin(user_id):
+    admin_ids = load_admins()
+    if str(user_id) not in admin_ids:
+        admin_ids.append(str(user_id))
+        save_admins(admin_ids)
+
+def remove_admin(user_id):
+    admin_ids = load_admins()
+    if str(user_id) in admin_ids:
+        admin_ids.remove(str(user_id))
+        save_admins(admin_ids)
