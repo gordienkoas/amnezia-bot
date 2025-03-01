@@ -93,6 +93,19 @@ run_with_spinner() {
 }
 
 check_updates() {
+    # Переход в директорию репозитория
+    if [[ ! -d "awg-docker-bot" ]]; then
+        echo -e "${RED}Директория awg-docker-bot не найдена. Проверьте установку.${NC}\n"
+        return 1
+    fi
+    cd awg-docker-bot || { echo -e "${RED}Не удалось перейти в директорию awg-docker-bot${NC}\n"; return 1; }
+
+    # Проверка, является ли текущая директория Git-репозиторием
+    if [[ ! -d ".git" ]]; then
+        echo -e "${RED}Текущая директория не является Git-репозиторием${NC}\n"
+        return 1
+    fi
+
     local stdout_temp=$(mktemp)
     local stderr_temp=$(mktemp)
     
@@ -138,6 +151,9 @@ check_updates() {
     else
         echo -e "${RED}Неожиданный ответ при проверке обновлений${NC}\n"
     fi
+
+    # Возвращаемся в исходную директорию (опционально)
+    cd .. || { echo -e "${RED}Не удалось вернуться в исходную директорию${NC}\n"; return 1; }
 }
 
 remove_amneziawg() {
