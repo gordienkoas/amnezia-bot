@@ -23,8 +23,6 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from yookassa import Configuration, Payment
-from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -49,16 +47,6 @@ WG_CONFIG_FILE = wg_config_file
 DOCKER_CONTAINER = docker_container
 ENDPOINT = endpoint
 
-Configuration.account_id = '993270'
-Configuration.secret_key = 'test_cE-RElZLKakvb585wjrh9XAoqGSyS_rcmta2v1MdURE'
-
-VPN_PRICES = {
-    '1': {'days': 30, 'price': 299},
-    '3': {'days': 90, 'price': 799},
-    '6': {'days': 180, 'price': 1499},
-    '12': {'days': 365, 'price': 2699}
-}
-
 class AdminMessageDeletionMiddleware(BaseMiddleware):
     async def on_process_message(self, message: types.Message, data: dict):
         if message.from_user.id in admins:
@@ -76,7 +64,7 @@ main_menu_markup = InlineKeyboardMarkup(row_width=1).add(
     InlineKeyboardButton("Список клиентов", callback_data="list_users"),
     InlineKeyboardButton("Создать бекап", callback_data="create_backup"),
     InlineKeyboardButton("Список админов", callback_data="list_admins"),
-    InlineKeyboardButton("Добавить администратора", callback_data="add_admin")  # Новая кнопка
+    InlineKeyboardButton("Добавить администратора", callback_data="add_admin")
 )
 
 user_main_messages = {}
@@ -267,7 +255,6 @@ async def handle_messages(message: types.Message):
         return
     user_state = user_main_messages.get(message.from_user.id, {}).get('state')
     if user_state == 'waiting_for_user_name':
-        # Существующий код для добавления пользователя
         user_name = message.text.strip()
         if not all(c.isalnum() or c in "-_" for c in user_name):
             await message.reply("Имя пользователя может содержать только буквы, цифры, дефисы и подчёркивания.")
@@ -331,8 +318,6 @@ async def handle_messages(message: types.Message):
     else:
         await message.reply("Неизвестная команда или действие.")
         asyncio.create_task(delete_message_after_delay(message.chat.id, message.message_id, delay=2))
-
-
 
 @dp.callback_query_handler(lambda c: c.data == "add_admin")
 async def prompt_for_admin_id(callback_query: types.CallbackQuery):
@@ -1201,7 +1186,6 @@ async def periodic_ensure_peer_names():
     db.ensure_peer_names()
 
 async def on_startup(dp):
-    global admins
     os.makedirs('files/connections', exist_ok=True)
     os.makedirs('users', exist_ok=True)
     await load_isp_cache_task()
@@ -1244,145 +1228,9 @@ async def on_startup(dp):
                 await deactivate_user(client_name)
 
 async def on_shutdown(dp):
-    scheduler.shutdown()
-    logger.info("Планировщик остановлен.")
+    if scheduler.running:
+        scheduler.shutdown()
+        logger.info("Планировщик остановлен.")
 
-async def show_payment_options(message: types.Message):
-    keyboard = InlineKeyboardMarkup()
-    for period, details in VPN_PRICES.items():
-        button_text = f"{period} мес. - {details['price']}₽"
-        keyboard.add(InlineKeyboardButton(
-            text=button_text,
-            callback_data=f"buy_{period}"
-        ))
-    await message.answer("Выберите период подписки:", reply_markup=keyboard)
-
-async def process_payment(callback_query: types.CallbackQuery):
-    period = callback_query.data.split('_')[1]
-    price_info = VPN_PRICES[period]
-    
-    payment = Payment.create({
-        "amount": {
-            "value": str(price_info['price']),
-            "currency": "RUB"
-        },
-        "confirmation": {
-            "type": "redirect",
-            "return_url": f"https://t.me/{(await bot.me).username}"
-        },
-        "capture": True,
-        "description": f"VPN подписка на {period} мес.",
-        "metadata": {
-            "user_id": str(callback_query.from_user.id),
-            "period": period
-        }
-    })
-    
-    db.add_payment(
-        user_id=callback_query.from_user.id,
-        payment_id=payment.id,
-        amount=float(price_info['price'])
-    )
-    
-    keyboard = InlineKeyboardMarkup()
-    keyboard.add(InlineKeyboardButton(
-        text="Оплатить",
-        url=payment.confirmation.confirmation_url
-    ))
-    
-    await callback_query.message.answer(
-        f"Для оплаты подписки на {period} мес. ({price_info['price']}₽) нажмите кнопку ниже:",
-        reply_markup=keyboard
-    )
-
-async def check_payment(payment_id: str):
-    payment = Payment.find_one(payment_id)
-    if payment.status == "succeeded":
-        metadata = payment.metadata
-        user_id = int(metadata["user_id"])
-        period = metadata["period"]
-        username = f"user_{user_id}"
-        expiration_date = datetime.now(pytz.UTC) + timedelta(days=VPN_PRICES[period]['days'])
-        
-        await db.root_add(username, ipv6=False)
-        db.set_user_expiration(username, expiration_date, "Неограниченно")
-        db.update_payment_status(payment_id, "completed")
-        
-        conf_path = os.path.join('users', username, f'{username}.conf')
-        if os.path.exists(conf_path):
-            with open(conf_path, 'rb') as config:
-                await bot.send_document(user_id, config, caption=f"Ваша VPN конфигурация для {period} мес.", disable_notification=True)
-        await bot.send_message(
-            user_id,
-            f"Спасибо за оплату! Ваша подписка активирована на {period} мес.\n"
-            f"Срок действия до: {expiration_date.strftime('%d.%m.%Y')}"
-        )
-
-async def show_payment_history(message: types.Message):
-    if message.from_user.id not in admins:
-        await message.answer("У вас нет прав для просмотра истории платежей.")
-        return
-    payments = db.get_all_payments()
-    if not payments:
-        await message.answer("История платежей пуста")
-        return
-    text = "История платежей:\n\n"
-    for payment in payments:
-        status = "✅" if payment['status'] == 'completed' else "⏳"
-        text += f"ID: {payment['payment_id']}\n"
-        text += f"Пользователь: {payment['user_id']}\n"
-        text += f"Сумма: {payment['amount']}₽\n"
-        text += f"Статус: {status}\n"
-        text += f"Дата: {payment['timestamp']}\n\n"
-    await message.answer(text)
-
-async def show_license_info(message: types.Message):
-    username = f"user_{message.from_user.id}"
-    expiration = db.get_user_expiration(username)
-    if not expiration:
-        await message.answer("У вас нет активной подписки. Используйте команду /buy для покупки.")
-        return
-    expiration_date = expiration
-    if expiration_date.tzinfo is None:
-        expiration_date = expiration_date.replace(tzinfo=pytz.UTC)
-    days_left = (expiration_date - datetime.now(pytz.UTC)).days
-    text = "Информация о вашей подписке:\n\n"
-    text += f"Статус: {'Активна' if days_left > 0 else 'Истекла'}\n"
-    text += f"Дата окончания: {expiration_date.strftime('%d.%m.%Y')}\n"
-    text += f"Осталось дней: {max(0, days_left)}\n"
-    keyboard = InlineKeyboardMarkup()
-    keyboard.add(InlineKeyboardButton(
-        text="Продлить подписку",
-        callback_data="show_payment_options"
-    ))
-    await message.answer(text, reply_markup=keyboard)
-
-dp.register_message_handler(show_payment_options, commands=['buy'])
-dp.register_message_handler(show_payment_history, commands=['payments'])
-dp.register_message_handler(show_license_info, commands=['license'])
-dp.register_callback_query_handler(process_payment, lambda c: c.data.startswith('buy_'))
-
-async def handle_yookassa_notification(request):
-    try:
-        data = await request.json()
-        if data['event'] == 'payment.succeeded':
-            payment_id = data['object']['id']
-            await check_payment(payment_id)
-        return web.Response(status=200)
-    except Exception as e:
-        logger.error(f"Error processing YooKassa notification: {e}")
-        return web.Response(status=500)
-
-async def on_startup(dp):
-    app = web.Application()
-    app.router.add_post('/yookassa-webhook', handle_yookassa_notification)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, 'localhost', 8080)
-    await site.start()
-    await on_startup(dp)
-
-async def on_shutdown(dp):
-    await on_shutdown(dp)
-
-executor.start_polling(dp, on_startup=on_startup, on_shutdown=on_shutdown)
+if __name__ == '__main__':
+    executor.start_polling(dp, on_startup=on_startup, on_shutdown=on_shutdown)
