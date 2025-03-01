@@ -15,13 +15,13 @@
 
 ## Возможности
 
+- Добавление администраторов и модераторов для упралением VPN
 - Добавление клиентов
 - Удаление клиентов
-- Создание временных конфигураций (1 час, 1 день, 1 неделя, 1 месяц, без ограничений)
-- Создание конфигурации с ограничением сетевого трафика (5 GB, 10 GB, 30 GB, 100 GB, без ограничений)
 - Получение информации об IP-адресе клиента (берется из Endpoint, используется API ресурса [ip-api.com](http://ip-api.com))
 - Создание ключа в формате `vpn://` при генерации нового клиента (так же, при получении конфигурации клиента), для использования в [AmneziaVPN](https://github.com/amnezia-vpn/amnezia-client)
 - Создание резервной копии
+- Инструкции по работе с VPN
 
 ## Установка
 
@@ -59,11 +59,6 @@
 ## Поддержка
 
 Поддержать разработчика можете следующими способами:
-- [Boosty](https://boosty.to/jb-selfcompany/donate)
-- LTC `ltc1qsa49jtpxau9f28fej7vpzj99lstx44792k4ack`
-- XMR `43ojbNWXSNCWjXAk1RbTvidACZKrWSpV7hXRosn9UQJhWEHHkzCB4g8Hh5sHhSzU7gBpwWkMFhgwuPLLuox6GqEQN7CLgHp`
-- BTC `bc1qt75kx0lwsw2npfh06kfq37gf97eper00sxp3tf` 
 
-Если у вас возникли вопросы или проблемы с установкой и использованием бота, создайте [issue](https://github.com/JB-SelfCompany/awg-docker-bot/issues) в этом репозитории или обратитесь к разработчику.
 
-- [Matrix](https://matrix.to/#/@jack_benq:shd.company)
+Если у вас возникли вопросы или проблемы с установкой и использованием бота, создайте [issue](https://github.com/stevefoxru/amnezia-bot/issues) в этом репозитории или обратитесь к разработчику.
