@@ -94,11 +94,11 @@ run_with_spinner() {
 
 check_updates() {
     # Переход в директорию репозитория
-    if [[ ! -d "awg-docker-bot" ]]; then
-        echo -e "${RED}Директория awg-docker-bot не найдена. Проверьте установку.${NC}\n"
+    if [[ ! -d "amnezia-bot" ]]; then
+        echo -e "${RED}Директория amnezia-bot не найдена. Проверьте установку.${NC}\n"
         return 1
     fi
-    cd awg-docker-bot || { echo -e "${RED}Не удалось перейти в директорию awg-docker-bot${NC}\n"; return 1; }
+    cd amnezia-bot || { echo -e "${RED}Не удалось перейти в директорию amnezia-bot${NC}\n"; return 1; }
 
     # Проверка, является ли текущая директория Git-репозиторием
     if [[ ! -d ".git" ]]; then
@@ -210,7 +210,7 @@ reinstall_bot() {
         systemctl list-units --type=service --all | grep -q "$SERVICE_NAME.service" && run_with_spinner "Удаление службы" "sudo systemctl disable $SERVICE_NAME -qq && sudo rm /etc/systemd/system/$SERVICE_NAME.service && sudo systemctl daemon-reload -qq"
         
         # Удаление старых файлов бота
-        run_with_spinner "Удаление старых файлов" "rm -rf awg-docker-bot"
+        run_with_spinner "Удаление старых файлов" "rm -rf amnezia-bot"
         
         # Запуск полной установки заново
         install_bot
@@ -294,9 +294,9 @@ install_and_configure_needrestart() {
 }
 
 clone_repository() {
-    if [[ -d "awg-docker-bot" ]]; then
+    if [[ -d "amnezia-bot" ]]; then
         echo -e "\n${YELLOW}Репозиторий существует${NC}"
-        cd awg-docker-bot || { echo -e "\n${RED}Ошибка перехода в директорию${NC}"; exit 1; }
+        cd amnezia-bot || { echo -e "\n${RED}Ошибка перехода в директорию${NC}"; exit 1; }
         return 0
     fi
     
@@ -337,15 +337,21 @@ initialize_bot() {
 }
 
 create_service() {
+    # Проверяем, что директории существуют
+    if [[ ! -d "/root/amnezia-bot/awg" ]] || [[ ! -f "/root/amnezia-bot/myenv/bin/python3.11" ]]; then
+        echo -e "${RED}Ошибка: необходимые директории или файлы отсутствуют${NC}"
+        exit 1
+    fi
+
     cat > /tmp/service_file << EOF
 [Unit]
 Description=AmneziaVPN Docker Telegram Bot
 After=network.target
 
 [Service]
-User=$USER
-WorkingDirectory=$(pwd)/awg
-ExecStart=$(pwd)/myenv/bin/python3.11 bot_manager.py
+User=root
+WorkingDirectory=/root/amnezia-bot/awg
+ExecStart=/root/amnezia-bot/myenv/bin/python3.11 bot_manager.py
 Restart=always
 
 [Install]
