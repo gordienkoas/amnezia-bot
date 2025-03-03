@@ -537,9 +537,12 @@ async def mobile_instructions(callback_query: types.CallbackQuery):
         return
     instruction_text = (
         "📱 *Инструкция для мобильных устройств:*\n\n"
-        "1. Скачайте приложение AmneziaVPN:\n"
+        "1.1. Скачайте приложение AmneziaVPN (Android}:\n"
         "   - [Google Play](https://play.google.com/store/apps/details?id=org.amnezia.vpn&hl=ru)\n"
         "   - Или через [GitHub](https://github.com/amnezia-vpn/amnezia-client)\n"
+        "1.2. Скачайте приложение AmneziaWG (iOS):\n"
+        "   - [App Store](https://apps.apple.com/ru/app/amneziawg/id6478942365)\n"
+        "   - Или если у вас регион не Россия то [AmneziaVPN](https://apps.apple.com/kz/app/amneziavpn/id1600529900)"
         "2. Откройте приложение и выберите 'Добавить конфигурацию'.\n"
         "3. Скопируйте VPN ключ из сообщения с файлом .conf.\n"
         "4. Вставьте ключ в приложение и нажмите 'Подключить'.\n"
