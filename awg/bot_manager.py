@@ -18,7 +18,7 @@ from aiogram.dispatcher import Dispatcher
 from aiogram.dispatcher.middlewares import BaseMiddleware
 from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from datetime import datetime
+from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
@@ -58,15 +58,21 @@ dp.middleware.setup(AdminMessageDeletionMiddleware())
 # Главное меню с новым порядком и эмодзи
 def get_main_menu_markup(user_id):
     markup = InlineKeyboardMarkup(row_width=2)
-    markup.add(InlineKeyboardButton("➕ Добавить пользователя", callback_data="add_user"))
-    markup.insert(InlineKeyboardButton("📋 Список клиентов", callback_data="list_users"))
-    markup.insert(InlineKeyboardButton("🔑 Получить конфиг", callback_data="get_config"))
+    # Последовательное добавление кнопок с помощью add
+    markup.add(
+        InlineKeyboardButton("➕ Добавить пользователя", callback_data="add_user"),
+        InlineKeyboardButton("📋 Список клиентов", callback_data="list_users")
+    )
+    markup.add(
+        InlineKeyboardButton("🔑 Получить конфиг", callback_data="get_config"),
+        InlineKeyboardButton("ℹ️ Инструкция", callback_data="instructions")
+    )
     if user_id in admins:
-        markup.insert(InlineKeyboardButton("👥 Список админов", callback_data="list_admins"))
-        markup.insert(InlineKeyboardButton("👤 Добавить админа", callback_data="add_admin"))
-    if user_id in admins:
+        markup.add(
+            InlineKeyboardButton("👥 Список админов", callback_data="list_admins"),
+            InlineKeyboardButton("👤 Добавить админа", callback_data="add_admin")
+        )
         markup.add(InlineKeyboardButton("💾 Создать бекап", callback_data="create_backup"))
-    markup.add(InlineKeyboardButton("ℹ️ Инструкция", callback_data="instructions"))
     return markup
 
 user_main_messages = {}
@@ -116,30 +122,40 @@ async def delete_message_after_delay(chat_id: int, message_id: int, delay: int =
         pass
 
 def parse_relative_time(relative_str: str) -> datetime:
-    relative_str = relative_str.lower().replace(' ago', '')
-    delta = 0
-    for part in relative_str.split(', '):
-        num, unit = part.split()
-        num = int(num)
-        if 'minute' in unit:
-            delta += num * 60
-        elif 'hour' in unit:
-            delta += num * 3600
-        elif 'day' in unit:
-            delta += num * 86400
-        elif 'week' in unit:
-            delta += num * 604800
-        elif 'month' in unit:
-            delta += num * 2592000
-    return datetime.now(pytz.UTC) - timedelta(seconds=delta)
+    if not isinstance(relative_str, str) or not relative_str.strip():
+        logger.error(f"Некорректный relative_str: {relative_str}")
+        return datetime.now(pytz.UTC)  # Значение по умолчанию
+    try:
+        relative_str = relative_str.lower().replace(' ago', '')
+        delta = 0
+        for part in relative_str.split(', '):
+            num, unit = part.split()
+            num = int(num)
+            if 'minute' in unit:
+                delta += num * 60
+            elif 'hour' in unit:
+                delta += num * 3600
+            elif 'day' in unit:
+                delta += num * 86400
+            elif 'week' in unit:
+                delta += num * 604800
+            elif 'month' in unit:
+                delta += num * 2592000
+        return datetime.now(pytz.UTC) - timedelta(seconds=delta)
+    except Exception as e:
+        logger.error(f"Ошибка в parse_relative_time: {str(e)}")
+        return datetime.now(pytz.UTC)  # Значение по умолчанию
 
 @dp.message_handler(commands=['start', 'help'])
 async def help_command_handler(message: types.Message):
     user_id = message.from_user.id
     if user_id in admins or user_id in moderators:
         sent_message = await message.answer("Выберите действие:", reply_markup=get_main_menu_markup(user_id))
-        user_main_messages[user_id] = {'chat_id': sent_message.chat.id, 'message_id': sent_message.message_id}
-        # Не закрепляем меню
+        user_main_messages[user_id] = {
+            'chat_id': sent_message.chat.id,
+            'message_id': sent_message.message_id,
+            'state': None  # Инициализируем state явно
+        }
     else:
         await message.answer("У вас нет доступа к этому боту.")
 
@@ -243,49 +259,102 @@ async def client_selected_callback(callback_query: types.CallbackQuery):
     if user_id not in admins and user_id not in moderators:
         await callback_query.answer("Нет прав.", show_alert=True)
         return
-    username = callback_query.data.split('client_')[1]
-    clients = db.get_client_list()
-    client_info = next((c for c in clients if c[0] == username), None)
-    if not client_info:
-        await callback_query.answer("Пользователь не найден.", show_alert=True)
-        return
     
-    status = "🔴 Офлайн"
-    incoming_traffic = "↓—"
-    outgoing_traffic = "↑—"
-    ipv4_address = re.search(r'(\d{1,3}\.){3}\d{1,3}/\d+', client_info[2]) or "—"
-    active_clients = db.get_active_list()
-    active_info = next((ac for ac in active_clients if ac[0] == username), None)
+    try:
+        logger.info(f"Callback data: {callback_query.data}")
+        username = callback_query.data.split('client_')[1]
+        logger.info(f"Выбран клиент: {username}")
+        
+        clients = db.get_client_list()
+        logger.info(f"Список клиентов: {clients}")
+        client_info = next((c for c in clients if c[0] == username), None)
+        if not client_info:
+            await callback_query.answer("Пользователь не найден.", show_alert=True)
+            return
+        logger.info(f"Информация о клиенте: {client_info}")
+        
+        # Базовые значения
+        status = "🔴 Офлайн"
+        incoming_traffic = "↓—"
+        outgoing_traffic = "↑—"
+        ipv4_address = "—"
+        if isinstance(client_info, (tuple, list)) and len(client_info) > 2 and client_info[2] is not None:
+            logger.info(f"client_info[2]: {client_info[2]}")
+            ip_match = re.search(r'(\d{1,3}\.){3}\d{1,3}/\d+', str(client_info[2]))
+            ipv4_address = ip_match.group(0) if ip_match else "—"
+        else:
+            logger.info(f"client_info некорректно: {client_info}")
+        
+        # Проверяем активность
+        active_clients = db.get_active_list()
+        logger.info(f"Список активных клиентов: {active_clients}")
+        active_info = next((ac for ac in active_clients if ac[0] == username), None)
+        logger.info(f"Активная информация: {active_info}")
+        
+        if (active_info is not None and isinstance(active_info, (tuple, list)) and 
+            len(active_info) > 2 and active_info[1] is not None and 
+            active_info[1].lower() not in ['never', 'нет данных', '-']):
+            logger.info(f"active_info[1]: {active_info[1]}")
+            try:
+                last_handshake = parse_relative_time(active_info[1])
+                if last_handshake is not None:
+                    logger.info(f"last_handshake: {last_handshake}")
+                    status = "🟢 Онлайн" if (datetime.now(pytz.UTC) - last_handshake).total_seconds() <= 60 else "❌ Офлайн"
+                if len(active_info) > 2 and active_info[2] is not None:
+                    logger.info(f"active_info[2]: {active_info[2]}")
+                    try:
+                        transfer_result = parse_transfer(active_info[2])
+                        if transfer_result is not None:
+                            incoming_bytes, outgoing_bytes = transfer_result
+                            incoming_traffic = f"↓{humanize.naturalsize(incoming_bytes)}"
+                            outgoing_traffic = f"↑{humanize.naturalsize(outgoing_bytes)}"
+                        else:
+                            logger.info("parse_transfer вернул None")
+                    except Exception as e:
+                        logger.error(f"Ошибка в parse_transfer: {str(e)}")
+            except Exception as e:
+                logger.error(f"Ошибка в parse_relative_time: {str(e)}")
+        
+        # Формируем текст профиля
+        text = (
+            f"📧 *Имя:* {username}\n"
+            f"🌐 *IPv4:* {ipv4_address}\n"
+            f"🌐 *Статус:* {status}\n"
+            f"🔼 *Исходящий:* {incoming_traffic}\n"
+            f"🔽 *Входящий:* {outgoing_traffic}"
+        )
+        
+        # Создаём клавиатуру
+        keyboard = InlineKeyboardMarkup(row_width=2).add(
+            InlineKeyboardButton("ℹ️ IP info", callback_data=f"ip_info_{username}"),
+            InlineKeyboardButton("🔗 Подключения", callback_data=f"connections_{username}"),
+            InlineKeyboardButton("🗑️ Удалить", callback_data=f"delete_user_{username}"),
+            InlineKeyboardButton("⬅️ Назад", callback_data="list_users"),
+            InlineKeyboardButton("🏠 Домой", callback_data="home")
+        )
+        
+        logger.info(f"Редактирование сообщения для {username}")
+        await bot.edit_message_text(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id,
+            text=text,
+            parse_mode="Markdown",
+            reply_markup=keyboard
+        )
+        await callback_query.answer()
     
-    if active_info and active_info[1].lower() not in ['never', 'нет данных', '-']:
-        last_handshake = parse_relative_time(active_info[1])
-        status = "🟢 Онлайн" if (datetime.now(pytz.UTC) - last_handshake).total_seconds() <= 60 else "❌ Офлайн"
-        incoming_bytes, outgoing_bytes = parse_transfer(active_info[2])
-        incoming_traffic = f"↓{humanize.naturalsize(incoming_bytes)}"
-        outgoing_traffic = f"↑{humanize.naturalsize(outgoing_bytes)}"
-    
-    text = (
-        f"📧 *Имя:* {username}\n"
-        f"🌐 *IPv4:* {ipv4_address}\n"
-        f"🌐 *Статус:* {status}\n"
-        f"🔼 *Исходящий:* {incoming_traffic}\n"
-        f"🔽 *Входящий:* {outgoing_traffic}"
-    )
-    keyboard = InlineKeyboardMarkup(row_width=2).add(
-        InlineKeyboardButton("ℹ️ IP info", callback_data=f"ip_info_{username}"),
-        InlineKeyboardButton("🔗 Подключения", callback_data=f"connections_{username}"),
-        InlineKeyboardButton("🗑️ Удалить", callback_data=f"delete_user_{username}"),
-        InlineKeyboardButton("⬅️ Назад", callback_data="list_users"),
-        InlineKeyboardButton("🏠 Домой", callback_data="home")
-    )
-    await bot.edit_message_text(
-        chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
-        text=text,
-        parse_mode="Markdown",
-        reply_markup=keyboard
-    )
-    await callback_query.answer()
+    except Exception as e:
+        logger.error(f"Ошибка в client_selected_callback: {str(e)}")
+        await bot.edit_message_text(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id,
+            text=f"Ошибка при загрузке профиля: {str(e)}",
+            reply_markup=InlineKeyboardMarkup().add(
+                InlineKeyboardButton("⬅️ Назад", callback_data="list_users"),
+                InlineKeyboardButton("🏠 Домой", callback_data="home")
+            )
+        )
+        await callback_query.answer("Ошибка на сервере.", show_alert=True)
 
 @dp.callback_query_handler(lambda c: c.data == "list_users")
 async def list_users_callback(callback_query: types.CallbackQuery):
@@ -293,27 +362,58 @@ async def list_users_callback(callback_query: types.CallbackQuery):
     if user_id not in admins and user_id not in moderators:
         await callback_query.answer("Нет прав.", show_alert=True)
         return
-    clients = db.get_client_list()
-    if not clients:
-        await callback_query.answer("Список пуст.", show_alert=True)
-        return
     
-    keyboard = InlineKeyboardMarkup(row_width=2)
-    active_clients = {client[0]: client[1] for client in db.get_active_list()}
-    now = datetime.now(pytz.UTC)
-    for client in clients:
-        username = client[0]
-        last_handshake = active_clients.get(username)
-        status = "❌" if not last_handshake or last_handshake.lower() in ['never', 'нет данных', '-'] else "🟢" if (now - parse_relative_time(last_handshake)).days <= 5 else "❌"
-        keyboard.insert(InlineKeyboardButton(f"{status} {username}", callback_data=f"client_{username}"))
-    keyboard.add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
-    await bot.edit_message_text(
-        chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
-        text="Выберите пользователя:",
-        reply_markup=keyboard
-    )
-    await callback_query.answer()
+    try:
+        logger.info("Запуск list_users_callback")
+        clients = db.get_client_list()
+        logger.info(f"Клиенты: {clients}")
+        if not clients:
+            await bot.edit_message_text(
+                chat_id=callback_query.message.chat.id,
+                message_id=callback_query.message.message_id,
+                text="Список клиентов пуст.",
+                reply_markup=InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("🏠 Домой", callback_data="home")
+                )
+            )
+            await callback_query.answer()
+            return
+        
+        keyboard = InlineKeyboardMarkup(row_width=2)
+        active_clients = {client[0]: client[1] for client in db.get_active_list()}
+        logger.info(f"Активные клиенты: {active_clients}")
+        now = datetime.now(pytz.UTC)
+        
+        for client in clients:
+            username = client[0]
+            last_handshake = active_clients.get(username)
+            logger.info(f"Клиент: {username}, last_handshake: {last_handshake}")
+            # Упрощённая логика статуса для теста
+            status = "❌" if not last_handshake or last_handshake.lower() in ['never', 'нет данных', '-'] else "🟢"
+            button_text = f"{status} {username}"
+            keyboard.insert(InlineKeyboardButton(button_text, callback_data=f"client_{username}"))
+        
+        keyboard.add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
+        
+        await bot.edit_message_text(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id,
+            text="Выберите пользователя:",
+            reply_markup=keyboard
+        )
+        await callback_query.answer()
+    
+    except Exception as e:
+        logger.error(f"Ошибка в list_users_callback: {str(e)}")
+        await bot.edit_message_text(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id,
+            text=f"Ошибка: {str(e)}",
+            reply_markup=InlineKeyboardMarkup().add(
+                InlineKeyboardButton("🏠 Домой", callback_data="home")
+            )
+        )
+        await callback_query.answer("Ошибка на сервере.", show_alert=True)
 
 @dp.callback_query_handler(lambda c: c.data == "list_admins")
 async def list_admins_callback(callback_query: types.CallbackQuery):
@@ -537,12 +637,9 @@ async def mobile_instructions(callback_query: types.CallbackQuery):
         return
     instruction_text = (
         "📱 *Инструкция для мобильных устройств:*\n\n"
-        "1.1. Скачайте приложение AmneziaVPN (Android}:\n"
+        "1. Скачайте приложение AmneziaVPN:\n"
         "   - [Google Play](https://play.google.com/store/apps/details?id=org.amnezia.vpn&hl=ru)\n"
         "   - Или через [GitHub](https://github.com/amnezia-vpn/amnezia-client)\n"
-        "1.2. Скачайте приложение AmneziaWG (iOS):\n"
-        "   - [App Store](https://apps.apple.com/ru/app/amneziawg/id6478942365)\n"
-        "   - Или если у вас регион не Россия то [AmneziaVPN](https://apps.apple.com/kz/app/amneziavpn/id1600529900)"
         "2. Откройте приложение и выберите 'Добавить конфигурацию'.\n"
         "3. Скопируйте VPN ключ из сообщения с файлом .conf.\n"
         "4. Вставьте ключ в приложение и нажмите 'Подключить'.\n"
@@ -590,14 +687,26 @@ async def pc_instructions(callback_query: types.CallbackQuery):
     await callback_query.answer()
 
 def parse_transfer(transfer_str):
-    incoming, outgoing = re.split(r'[/,]', transfer_str)[:2]
-    size_map = {'B': 1, 'KB': 10**3, 'KiB': 1024, 'MB': 10**6, 'MiB': 1024**2, 'GB': 10**9, 'GiB': 1024**3}
-    for unit, multiplier in size_map.items():
-        if unit in incoming:
-            incoming_bytes = float(re.match(r'([\d.]+)', incoming)[0]) * multiplier
-        if unit in outgoing:
-            outgoing_bytes = float(re.match(r'([\d.]+)', outgoing)[0]) * multiplier
-    return incoming_bytes, outgoing_bytes
+    if not isinstance(transfer_str, str) or not transfer_str.strip():
+        logger.error(f"Некорректный transfer_str: {transfer_str}")
+        return 0, 0  # Значения по умолчанию
+    try:
+        incoming, outgoing = re.split(r'[/,]', transfer_str)[:2]
+        size_map = {'B': 1, 'KB': 10**3, 'KiB': 1024, 'MB': 10**6, 'MiB': 1024**2, 'GB': 10**9, 'GiB': 1024**3}
+        incoming_bytes = outgoing_bytes = 0
+        for unit, multiplier in size_map.items():
+            if unit in incoming:
+                match = re.match(r'([\d.]+)', incoming)
+                if match:
+                    incoming_bytes = float(match.group(0)) * multiplier
+            if unit in outgoing:
+                match = re.match(r'([\d.]+)', outgoing)
+                if match:
+                    outgoing_bytes = float(match.group(0)) * multiplier
+        return incoming_bytes, outgoing_bytes
+    except Exception as e:
+        logger.error(f"Ошибка в parse_transfer: {str(e)}")
+        return 0, 0  # Значения по умолчанию
 
 async def generate_vpn_key(conf_path: str) -> str:
     process = await asyncio.create_subprocess_exec(
