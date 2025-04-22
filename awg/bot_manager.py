@@ -1276,7 +1276,8 @@ async def check_payment_status():
 
 if __name__ == '__main__':
     import asyncio
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
         loop.run_until_complete(load_isp_cache())
         scheduler.add_job(check_payment_status, IntervalTrigger(minutes=5))
