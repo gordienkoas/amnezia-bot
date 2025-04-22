@@ -16,6 +16,74 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT_NAME="$(basename "$0")"
 SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_NAME"
 
+# Функция проверки обновлений на GitHub
+check_github_updates() {
+    local current_sha local_sha latest_sha auto_mode="$1"
+    cd amnezia-bot || { echo -e "${RED}Каталог amnezia-bot не найден${NC}"; return 1; }
+    
+    # Получение текущего SHA коммита
+    local_sha=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+    
+    # Получение последнего коммита через GitHub API
+    if command -v curl &>/dev/null; then
+        latest_sha=$(curl -s "$REPO_API/commits/main" | jq -r '.sha' 2>/dev/null)
+        [[ -z "$latest_sha" ]] && { echo -e "${RED}Не удалось получить данные с GitHub${NC}"; cd ..; return 1; }
+    else
+        echo -e "${RED}curl не установлен${NC}"; cd ..; return 1
+    fi
+    
+    # Сравнение версий
+    if [[ "$local_sha" == "$latest_sha" ]]; then
+        echo -e "${GREEN}Репозиторий актуален (SHA: $local_sha)${NC}"
+        cd ..; return 0
+    fi
+    
+    echo -e "${YELLOW}Доступно обновление (текущий SHA: $local_sha, последний SHA: $latest_sha)${NC}"
+    if [[ "$auto_mode" == "--auto" ]]; then
+        # Проверка на наличие локальных изменений
+        if git status --porcelain | grep -q .; then
+            echo -e "${YELLOW}Обнаружены локальные изменения. Сбрасываем их...${NC}"
+            run_with_spinner "Сброс локальных изменений" "git reset --hard && git clean -fd"
+        fi
+        run_with_spinner "Обновление репозитория" "git pull"
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}Не удалось обновить репозиторий${NC}"
+            cd ..; return 1
+        fi
+        echo "$latest_sha" > "$LOCAL_VERSION_FILE"
+        check_script_update
+        run_with_spinner "Перезапуск службы" "sudo systemctl restart $SERVICE_NAME -q"
+    else
+        echo -ne "${BLUE}1) Установить 2) Отменить: ${NC}"; read choice
+        if [[ "$choice" == "1" ]]; then
+            if git status --porcelain | grep -q .; then
+                echo -e "${YELLOW}Обнаружены локальные изменения. Сбрасываем их...${NC}"
+                run_with_spinner "Сброс локальных изменений" "git reset --hard && git clean -fd"
+            fi
+            run_with_spinner "Обновление репозитория" "git pull"
+            if [ $? -ne 0 ]; then
+                echo -e "${RED}Не удалось обновить репозиторий${NC}"
+                cd ..; return 1
+            fi
+            echo "$latest_sha" > "$LOCAL_VERSION_FILE"
+            check_script_update
+            run_with_spinner "Перезапуск службы" "sudo systemctl restart $SERVICE_NAME -q"
+        else
+            echo -e "${YELLOW}Обновление отменено${NC}"
+        fi
+    fi
+    cd ..
+}
+
+# Проверка и применение обновлений
+check_updates() {
+    if [[ ! -d "amnezia-bot/.git" ]]; then
+        echo -e "${RED}Репозиторий не найден. Пожалуйста, установите бот сначала.${NC}"
+        return 1
+    fi
+    check_github_updates --auto
+}
+
 # Параметры скрипта
 while [[ "$#" -gt 0 ]]; do
     case $1 in
@@ -30,19 +98,6 @@ while [[ "$#" -gt 0 ]]; do
     esac
     shift
 done
-
-# Получение версии Ubuntu
-get_ubuntu_version() {
-    if command -v lsb_release &>/dev/null; then
-        UBUNTU_VERSION=$(lsb_release -rs)
-        UBUNTU_CODENAME=$(lsb_release -cs)
-        DISTRIB_ID=$(lsb_release -is)
-        [[ "$DISTRIB_ID" != "Ubuntu" ]] && { echo -e "${RED}Скрипт поддерживает только Ubuntu. Обнаружена система: $DISTRIB_ID${NC}"; exit 1; }
-    else
-        echo -e "${RED}lsb_release не установлен. Установите пакет lsb-release.${NC}"
-        exit 1
-    fi
-}
 
 # Функция запуска команд с индикатором
 run_with_spinner() {
@@ -64,67 +119,6 @@ run_with_spinner() {
     fi
 }
 
-# Проверка обновлений на GitHub
-check_github_updates() {
-    local current_sha local_sha latest_sha
-    cd amnezia-bot || { echo -e "${RED}Каталог amnezia-bot не найден${NC}"; return 1; }
-    
-    # Получение текущего SHA коммита
-    local_sha=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
-    
-    # Получение последнего коммита через GitHub API
-    if command -v curl &>/dev/null; then
-        latest_sha=$(curl -s "$REPO_API/commits/main" | jq -r '.sha' 2>/dev/null)
-        [[ -z "$latest_sha" ]] && { echo -e "${RED}Не удалось получить данные с GitHub${NC}"; cd ..; return 1; }
-    else
-        echo -e "${RED}curl не установлен${NC}"; cd ..; return 1
-    fi
-    
-    # Сравнение версий
-    if [[ "$local_sha" == "$latest_sha" ]]; then
-        echo -e "${GREEN}Репозиторий актуален (SHA: $local_sha)${NC}"
-        cd ..; return 0
-    fi
-    
-    echo -e "${YELLOW}Доступно обновление (текущий SHA: $local_sha, последний SHA: $latest_sha)${NC}"
-    # Автоматическое обновление при вызове из бота
-    if [[ "$1" == "--auto" ]]; then
-        # Проверка на наличие локальных изменений
-        if git status --porcelain | grep -q .; then
-            echo -e "${YELLOW}Обнаружены локальные изменения. Сбрасываем их...${NC}"
-            run_with_spinner "Сброс локальных изменений" "git reset --hard && git clean -fd"
-        fi
-        run_with_spinner "Обновление репозитория" "git pull"
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}Не удалось обновить репозиторий${NC}"
-            cd ..; return 1
-        fi
-        echo "$latest_sha" > "$LOCAL_VERSION_FILE"
-        check_script_update
-        run_with_spinner "Перезапуск службы" "sudo systemctl restart $SERVICE_NAME -q"
-    else
-        echo -ne "${BLUE}1) Установить 2) Отменить: ${NC}"; read choice
-        if [[ "$choice" == "1" ]]; then
-            # Проверка на наличие локальных изменений
-            if git status --porcelain | grep -q .; then
-                echo -e "${YELLOW}Обнаружены локальные изменения. Сбрасываем их...${NC}"
-                run_with_spinner "Сброс локальных изменений" "git reset --hard && git clean -fd"
-            fi
-            run_with_spinner "Обновление репозитория" "git pull"
-            if [ $? -ne 0 ]; then
-                echo -e "${RED}Не удалось обновить репозиторий${NC}"
-                cd ..; return 1
-            fi
-            echo "$latest_sha" > "$LOCAL_VERSION_FILE"
-            check_script_update
-            run_with_spinner "Перезапуск службы" "sudo systemctl restart $SERVICE_NAME -q"
-        else
-            echo -e "${YELLOW}Обновление отменено${NC}"
-        fi
-    fi
-    cd ..
-}
-
 # Проверка обновления самого скрипта
 check_script_update() {
     local temp_script=$(mktemp)
@@ -141,6 +135,19 @@ check_script_update() {
     else
         rm -f "$temp_script"
         echo -e "${YELLOW}Скрипт install.sh не найден в репозитории${NC}"
+    fi
+}
+
+# Получение версии Ubuntu
+get_ubuntu_version() {
+    if command -v lsb_release &>/dev/null; then
+        UBUNTU_VERSION=$(lsb_release -rs)
+        UBUNTU_CODENAME=$(lsb_release -cs)
+        DISTRIB_ID=$(lsb_release -is)
+        [[ "$DISTRIB_ID" != "Ubuntu" ]] && { echo -e "${RED}Скрипт поддерживает только Ubuntu. Обнаружена система: $DISTRIB_ID${NC}"; exit 1; }
+    else
+        echo -e "${RED}lsb_release не установлен. Установите пакет lsb-release.${NC}"
+        exit 1
     fi
 }
 
@@ -241,15 +248,6 @@ EOF
     run_with_spinner "Обновление systemd" "sudo systemctl daemon-reload -q"
     run_with_spinner "Запуск службы" "sudo systemctl start $SERVICE_NAME -q"
     run_with_spinner "Включение автозапуска" "sudo systemctl enable $SERVICE_NAME -q"
-}
-
-# Проверка и применение обновлений
-check_updates() {
-    if [[ ! -d "amnezia-bot/.git" ]]; then
-        echo -e "${RED}Репозиторий не найден. Пожалуйста, установите бот сначала.${NC}"
-        return 1
-    fi
-    check_github_updates --auto
 }
 
 # Удаление AmneziaWG
