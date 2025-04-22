@@ -87,25 +87,40 @@ check_github_updates() {
     fi
     
     echo -e "${YELLOW}Доступно обновление (текущий SHA: $local_sha, последний SHA: $latest_sha)${NC}"
-    echo -ne "${BLUE}1) Установить 2) Отменить: ${NC}"; read choice
-    if [[ "$choice" == "1" ]]; then
+    # Автоматическое обновление при вызове из бота
+    if [[ "$1" == "--auto" ]]; then
         # Проверка на наличие локальных изменений
         if git status --porcelain | grep -q .; then
             echo -e "${YELLOW}Обнаружены локальные изменения. Сбрасываем их...${NC}"
             run_with_spinner "Сброс локальных изменений" "git reset --hard && git clean -fd"
         fi
-        # Выполнение git pull
         run_with_spinner "Обновление репозитория" "git pull"
         if [ $? -ne 0 ]; then
             echo -e "${RED}Не удалось обновить репозиторий${NC}"
             cd ..; return 1
         fi
         echo "$latest_sha" > "$LOCAL_VERSION_FILE"
-        # Проверка обновления самого скрипта
         check_script_update
         run_with_spinner "Перезапуск службы" "sudo systemctl restart $SERVICE_NAME -q"
     else
-        echo -e "${YELLOW}Обновление отменено${NC}"
+        echo -ne "${BLUE}1) Установить 2) Отменить: ${NC}"; read choice
+        if [[ "$choice" == "1" ]]; then
+            # Проверка на наличие локальных изменений
+            if git status --porcelain | grep -q .; then
+                echo -e "${YELLOW}Обнаружены локальные изменения. Сбрасываем их...${NC}"
+                run_with_spinner "Сброс локальных изменений" "git reset --hard && git clean -fd"
+            fi
+            run_with_spinner "Обновление репозитория" "git pull"
+            if [ $? -ne 0 ]; then
+                echo -e "${RED}Не удалось обновить репозиторий${NC}"
+                cd ..; return 1
+            fi
+            echo "$latest_sha" > "$LOCAL_VERSION_FILE"
+            check_script_update
+            run_with_spinner "Перезапуск службы" "sudo systemctl restart $SERVICE_NAME -q"
+        else
+            echo -e "${YELLOW}Обновление отменено${NC}"
+        fi
     fi
     cd ..
 }
