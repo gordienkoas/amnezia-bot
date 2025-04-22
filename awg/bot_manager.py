@@ -87,6 +87,7 @@ def get_main_menu_markup(user_id):
             InlineKeyboardButton("💾 Создать бекап", callback_data="create_backup"),
             InlineKeyboardButton("🎟️ Управление промокодами", callback_data="manage_promocodes")
         )
+        markup.add(InlineKeyboardButton("🔄 Проверить обновления", callback_data="check_updates"))
     return markup
 
 user_main_messages = {}
@@ -733,11 +734,9 @@ async def select_period_callback(callback_query: types.CallbackQuery):
     discount = user_main_messages.get(user_id, {}).get('promocode_discount', 0)
     final_price = price * (1 - discount / 100)
     
-    # Заглушка для создания платежа
     payment_id = str(uuid.uuid4())
     db.add_payment(user_id, payment_id, final_price, 'pending')
     
-    # Предполагается, что здесь будет интеграция с платежной системой
     payment_url = f"https://example.com/pay/{payment_id}"  # Замените на реальный URL платежной системы
     
     keyboard = InlineKeyboardMarkup().add(
@@ -841,6 +840,31 @@ async def remove_promocode_callback(callback_query: types.CallbackQuery):
         await callback_query.answer(f"Промокод {code} не найден.", show_alert=True)
     await manage_promocodes_callback(callback_query)
 
+@dp.callback_query_handler(lambda c: c.data == "check_updates")
+async def check_updates_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    if user_id not in admins:
+        await callback_query.answer("Нет прав.", show_alert=True)
+        return
+    try:
+        process = await asyncio.create_subprocess_exec(
+            '/root/install.sh', '--check-update',
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+        output = stdout.decode().strip() + stderr.decode().strip()
+        await bot.send_message(user_id, f"Результат проверки обновлений:\n```\n{output}\n```", parse_mode="Markdown")
+    except Exception as e:
+        await bot.send_message(user_id, f"Ошибка при проверке обновлений: {str(e)}")
+    await bot.edit_message_text(
+        chat_id=callback_query.message.chat.id,
+        message_id=callback_query.message.message_id,
+        text="Выберите действие:",
+        reply_markup=get_main_menu_markup(user_id)
+    )
+    await callback_query.answer()
+
 async def check_expired_keys():
     now = datetime.now(pytz.UTC)
     for user, expiration, _ in db.get_users_with_expiration():
@@ -851,12 +875,9 @@ async def check_expired_keys():
             logger.info(f"Пользователь {user} деактивирован из-за истечения срока действия.")
 
 async def check_payment_status():
-    # Заглушка для проверки статуса платежа
-    # В реальной системе здесь будет запрос к API платежной системы
     payments = db.get_all_payments()
     for payment in payments:
         if payment['status'] == 'pending':
-            # Предположим, что платеж подтвержден (заглушка)
             db.update_payment_status(payment['payment_id'], 'completed')
             user_id = payment['user_id']
             if user_id in user_main_messages and 'pending_payment' in user_main_messages[user_id]:
@@ -865,7 +886,6 @@ async def check_payment_status():
                 months = {'1_month': 1, '3_months': 3, '6_months': 6}[period]
                 expiration = datetime.now(pytz.UTC) + timedelta(days=30 * months)
                 
-                # Генерация уникального имени пользователя
                 username = f"user_{user_id}_{uuid.uuid4().hex[:8]}"
                 success = db.root_add(username, ipv6=False)
                 if success:
@@ -879,6 +899,21 @@ async def check_payment_status():
                             await bot.pin_chat_message(user_id, config_message.message_id, disable_notification=True)
                 user_main_messages[user_id].pop('pending_payment', None)
                 user_main_messages[user_id].pop('promocode_discount', None)
+
+async def auto_check_updates():
+    try:
+        process = await asyncio.create_subprocess_exec(
+            '/root/install.sh', '--check-update',
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+        output = stdout.decode().strip() + stderr.decode().strip()
+        if "Доступно обновление" in output:
+            for admin_id in admins:
+                await bot.send_message(admin_id, f"Обнаружено обновление:\n```\n{output}\n```", parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Ошибка при автоматической проверке обновлений: {str(e)}")
 
 def parse_transfer(transfer_str):
     if not isinstance(transfer_str, str) or not transfer_str.strip():
@@ -932,6 +967,7 @@ async def on_startup(dp):
     scheduler.add_job(db.ensure_peer_names, IntervalTrigger(minutes=1))
     scheduler.add_job(check_expired_keys, IntervalTrigger(minutes=5))
     scheduler.add_job(check_payment_status, IntervalTrigger(minutes=1))
+    scheduler.add_job(auto_check_updates, IntervalTrigger(hours=24))
 
 async def on_shutdown(dp):
     scheduler.shutdown()
