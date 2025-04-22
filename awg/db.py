@@ -11,7 +11,8 @@ from datetime import datetime, timedelta
 EXPIRATIONS_FILE = 'files/expirations.json'
 PAYMENTS_FILE = 'files/payments.json'
 ADMINS_FILE = 'files/admins.json'
-PROMOCODES_FILE = 'files/promocodes.json'  # Новый файл для промокодов
+PROMOCODES_FILE = 'files/promocodes.json'
+USER_TELEGRAM_IDS_FILE = 'files/user_telegram_ids.json'
 UTC = pytz.UTC
 
 logging.basicConfig(level=logging.INFO)
@@ -315,221 +316,263 @@ def get_active_list():
         return active_clients
 
     except subprocess.CalledProcessError as e:
-        print(f"Ошибка при получении активных клиентов: {e}")
+        logger.error(f"Ошибка при получении активных клиентов: {e}")
         return []
 
-def deactive_user_db(client_name):
+def deactive_user_db(username):
     setting = get_config()
-    wg_config_file = setting['wg_config_file']
     docker_container = setting['docker_container']
-
-    clients = get_client_list()
-    client_entry = next((c for c in clients if c[0] == client_name), None)
-    if client_entry:
-        client_public_key = client_entry[1]
-        if subprocess.call(["./removeclient.sh", client_name, client_public_key, wg_config_file, docker_container]) == 0:
-            return True
-    else:
-        logger.error(f"Пользователь {client_name} не найден в списке клиентов.")
-    return False
-
-def load_expirations():
-    if not os.path.exists(EXPIRATIONS_FILE):
-        return {}
-    with open(EXPIRATIONS_FILE, 'r') as f:
-        try:
-            data = json.load(f)
-            for user, info in data.items():
-                if info.get('expiration_time'):
-                    data[user]['expiration_time'] = datetime.fromisoformat(info['expiration_time']).replace(tzinfo=UTC)
-                else:
-                    data[user]['expiration_time'] = None
-            return data
-        except json.JSONDecodeError:
-            logger.error("Ошибка при загрузке expirations.json.")
-            return {}
-
-def save_expirations(expirations):
-    os.makedirs(os.path.dirname(EXPIRATIONS_FILE), exist_ok=True)
-    data = {}
-    for user, info in expirations.items():
-        data[user] = {
-            'expiration_time': info['expiration_time'].isoformat() if info['expiration_time'] else None,
-            'traffic_limit': info.get('traffic_limit', "Неограниченно")
-        }
-    with open(EXPIRATIONS_FILE, 'w') as f:
-        json.dump(data, f)
-
-def set_user_expiration(username: str, expiration: datetime, traffic_limit: str):
-    expirations = load_expirations()
-    if username not in expirations:
-        expirations[username] = {}
-    if expiration:
-        if expiration.tzinfo is None:
-            expiration = expiration.replace(tzinfo=UTC)
-        expirations[username]['expiration_time'] = expiration
-    else:
-        expirations[username]['expiration_time'] = None
-    expirations[username]['traffic_limit'] = traffic_limit
-    save_expirations(expirations)
-
-def remove_user_expiration(username: str):
-    expirations = load_expirations()
-    if username in expirations:
-        del expirations[username]
-        save_expirations(expirations)
-
-def get_users_with_expiration():
-    expirations = load_expirations()
-    return [(user, info['expiration_time'].isoformat() if info['expiration_time'] else None, info.get('traffic_limit', "Неограниченно")) for user, info in expirations.items()]
-
-def get_user_expiration(username: str):
-    expirations = load_expirations()
-    return expirations.get(username, {}).get('expiration_time', None)
-
-def get_user_traffic_limit(username: str):
-    expirations = load_expirations()
-    return expirations.get(username, {}).get('traffic_limit', "Неограниченно")
-
-def load_payments():
-    if os.path.exists(PAYMENTS_FILE):
-        try:
-            with open(PAYMENTS_FILE, 'r') as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
-
-def save_payments(payments):
-    os.makedirs(os.path.dirname(PAYMENTS_FILE), exist_ok=True)
-    with open(PAYMENTS_FILE, 'w') as f:
-        json.dump(payments, f, indent=4)
-
-def add_payment(user_id: int, payment_id: str, amount: float, status: str = 'pending'):
-    payments = load_payments()
-    payment_data = {
-        'user_id': user_id,
-        'payment_id': payment_id,
-        'amount': amount,
-        'status': status,
-        'timestamp': datetime.now(UTC).isoformat()
-    }
-    if str(user_id) not in payments:
-        payments[str(user_id)] = []
-    payments[str(user_id)].append(payment_data)
-    save_payments(payments)
-    return payment_data
-
-def update_payment_status(payment_id: str, status: str):
-    payments = load_payments()
-    for user_payments in payments.values():
-        for payment in user_payments:
-            if payment['payment_id'] == payment_id:
-                payment['status'] = status
-                save_payments(payments)
-                return True
-    return False
-
-def get_user_payments(user_id: int):
-    payments = load_payments()
-    return payments.get(str(user_id), [])
-
-def get_all_payments():
-    payments = load_payments()
-    flat_payments = []
-    for user_id, user_payments in payments.items():
-        flat_payments.extend(user_payments)
-    return flat_payments
-
-def load_promocodes():
-    os.makedirs(os.path.dirname(PROMOCODES_FILE), exist_ok=True)
-    if not os.path.exists(PROMOCODES_FILE):
-        return {}
-    with open(PROMOCODES_FILE, 'r') as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            logger.error("Ошибка при загрузке promocodes.json.")
-            return {}
-
-def save_promocodes(promocodes):
-    os.makedirs(os.path.dirname(PROMOCODES_FILE), exist_ok=True)
-    with open(PROMOCODES_FILE, 'w') as f:
-        json.dump(promocodes, f, indent=4)
-
-def add_promocode(code: str, discount: float, expires_at: datetime = None, max_uses: int = None):
-    promocodes = load_promocodes()
-    if code in promocodes:
-        logger.error(f"Промокод {code} уже существует.")
-        return False
-    promocodes[code] = {
-        'discount': discount,  # Скидка в процентах (например, 10.0 для 10%)
-        'expires_at': expires_at.isoformat() if expires_at else None,
-        'max_uses': max_uses,
-        'uses': 0
-    }
-    save_promocodes(promocodes)
-    return True
-
-def validate_promocode(code: str):
-    promocodes = load_promocodes()
-    if code not in promocodes:
-        return None
-    promo = promocodes[code]
-    now = datetime.now(UTC)
-    if promo['expires_at'] and datetime.fromisoformat(promo['expires_at']).replace(tzinfo=UTC) < now:
-        return None
-    if promo['max_uses'] is not None and promo['uses'] >= promo['max_uses']:
-        return None
-    return promo
-
-def apply_promocode(code: str):
-    promocodes = load_promocodes()
-    promo = validate_promocode(code)
-    if not promo:
-        return False
-    promocodes[code]['uses'] += 1
-    save_promocodes(promocodes)
-    return promo['discount']
-
-def get_promocodes():
-    return load_promocodes()
-
-def remove_promocode(code: str):
-    promocodes = load_promocodes()
-    if code in promocodes:
-        del promocodes[code]
-        save_promocodes(promocodes)
+    try:
+        cmd = f"./removeclient.sh {username} {docker_container}"
+        subprocess.check_call(cmd, shell=True)
+        logger.info(f"Пользователь {username} удалён.")
         return True
-    return False
-
-def load_admins():
-    os.makedirs(os.path.dirname(ADMINS_FILE), exist_ok=True)
-    if not os.path.exists(ADMINS_FILE):
-        return []
-    with open(ADMINS_FILE, 'r') as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            logger.error("Ошибка при загрузке admins.json.")
-            return []
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Ошибка при удалении пользователя {username}: {e}")
+        return False
 
 def save_admins(admin_ids):
     os.makedirs(os.path.dirname(ADMINS_FILE), exist_ok=True)
     with open(ADMINS_FILE, 'w') as f:
         json.dump(admin_ids, f)
 
+def add_admin(admin_id):
+    admin_ids = get_admins()
+    if str(admin_id) not in admin_ids:
+        admin_ids.append(str(admin_id))
+        save_admins(admin_ids)
+
+def remove_admin(admin_id):
+    admin_ids = get_admins()
+    if str(admin_id) in admin_ids:
+        admin_ids.remove(str(admin_id))
+        save_admins(admin_ids)
+
 def get_admins():
-    return load_admins()
+    if os.path.exists(ADMINS_FILE):
+        with open(ADMINS_FILE, 'r') as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                logger.error("Ошибка при разборе файла admins.json.")
+                return []
+    return []
 
-def add_admin(user_id):
-    admin_ids = load_admins()
-    if str(user_id) not in admin_ids:
-        admin_ids.append(str(user_id))
-        save_admins(admin_ids)
+def get_user_expiration(username):
+    if os.path.exists(EXPIRATIONS_FILE):
+        with open(EXPIRATIONS_FILE, 'r') as f:
+            try:
+                expirations = json.load(f)
+                expiration_str = expirations.get(username)
+                if expiration_str:
+                    return datetime.fromisoformat(expiration_str).astimezone(UTC)
+            except json.JSONDecodeError:
+                logger.error("Ошибка при разборе файла expirations.json.")
+    return None
 
-def remove_admin(user_id):
-    admin_ids = load_admins()
-    if str(user_id) in admin_ids:
-        admin_ids.remove(str(user_id))
-        save_admins(admin_ids)
+def set_user_expiration(username, expiration_date, traffic_limit):
+    os.makedirs(os.path.dirname(EXPIRATIONS_FILE), exist_ok=True)
+    expirations = {}
+    if os.path.exists(EXPIRATIONS_FILE):
+        with open(EXPIRATIONS_FILE, 'r') as f:
+            try:
+                expirations = json.load(f)
+            except json.JSONDecodeError:
+                logger.error("Ошибка при разборе файла expirations.json.")
+    expirations[username] = expiration_date.isoformat()
+    with open(EXPIRATIONS_FILE, 'w') as f:
+        json.dump(expirations, f)
+
+def remove_user_expiration(username):
+    if os.path.exists(EXPIRATIONS_FILE):
+        with open(EXPIRATIONS_FILE, 'r') as f:
+            try:
+                expirations = json.load(f)
+                if username in expirations:
+                    del expirations[username]
+                    with open(EXPIRATIONS_FILE, 'w') as f:
+                        json.dump(expirations, f)
+            except json.JSONDecodeError:
+                logger.error("Ошибка при разборе файла expirations.json.")
+
+def set_user_telegram_id(username, telegram_id):
+    os.makedirs(os.path.dirname(USER_TELEGRAM_IDS_FILE), exist_ok=True)
+    telegram_ids = {}
+    if os.path.exists(USER_TELEGRAM_IDS_FILE):
+        with open(USER_TELEGRAM_IDS_FILE, 'r') as f:
+            try:
+                telegram_ids = json.load(f)
+            except json.JSONDecodeError:
+                logger.error("Ошибка при разборе файла user_telegram_ids.json.")
+    telegram_ids[username] = str(telegram_id)
+    with open(USER_TELEGRAM_IDS_FILE, 'w') as f:
+        json.dump(telegram_ids, f)
+
+def get_user_telegram_id(username):
+    if os.path.exists(USER_TELEGRAM_IDS_FILE):
+        with open(USER_TELEGRAM_IDS_FILE, 'r') as f:
+            try:
+                telegram_ids = json.load(f)
+                return telegram_ids.get(username)
+            except json.JSONDecodeError:
+                logger.error("Ошибка при разборе файла user_telegram_ids.json.")
+    return None
+
+def clear_old_keys(before_date):
+    try:
+        before = datetime.fromisoformat(before_date).astimezone(UTC)
+    except ValueError:
+        logger.error(f"Неверный формат даты: {before_date}")
+        return False
+
+    clients = get_client_list()
+    expirations = {}
+    if os.path.exists(EXPIRATIONS_FILE):
+        with open(EXPIRATIONS_FILE, 'r') as f:
+            try:
+                expirations = json.load(f)
+            except json.JSONDecodeError:
+                logger.error("Ошибка при разборе файла expirations.json.")
+
+    removed = False
+    for client in clients:
+        username = client[0]
+        expiration_str = expirations.get(username)
+        if expiration_str:
+            try:
+                expiration = datetime.fromisoformat(expiration_str).astimezone(UTC)
+                if expiration < before:
+                    if deactive_user_db(username):
+                        remove_user_expiration(username)
+                        user_path = os.path.join('users', username)
+                        if os.path.exists(user_path):
+                            import shutil
+                            shutil.rmtree(user_path)
+                        logger.info(f"Удалён старый ключ для {username} с истёкшей датой {expiration_str}")
+                        removed = True
+            except ValueError:
+                logger.error(f"Неверный формат даты истечения для {username}: {expiration_str}")
+    return removed
+
+def add_payment(user_id, payment_id, amount, status):
+    os.makedirs(os.path.dirname(PAYMENTS_FILE), exist_ok=True)
+    payments = {}
+    if os.path.exists(PAYMENTS_FILE):
+        with open(PAYMENTS_FILE, 'r') as f:
+            try:
+                payments = json.load(f)
+            except json.JSONDecodeError:
+                logger.error("Ошибка при разборе файла payments.json.")
+    payments[payment_id] = {
+        'user_id': user_id,
+        'amount': amount,
+        'status': status,
+        'created_at': datetime.now(UTC).isoformat()
+    }
+    with open(PAYMENTS_FILE, 'w') as f:
+        json.dump(payments, f)
+
+def update_payment_status(payment_id, status):
+    if os.path.exists(PAYMENTS_FILE):
+        with open(PAYMENTS_FILE, 'r') as f:
+            try:
+                payments = json.load(f)
+                if payment_id in payments:
+                    payments[payment_id]['status'] = status
+                    with open(PAYMENTS_FILE, 'w') as f:
+                        json.dump(payments, f)
+                    return True
+            except json.JSONDecodeError:
+                logger.error("Ошибка при разборе файла payments.json.")
+    return False
+
+def get_pending_payments():
+    if os.path.exists(PAYMENTS_FILE):
+        with open(PAYMENTS_FILE, 'r') as f:
+            try:
+                payments = json.load(f)
+                return [
+                    (p['user_id'], payment_id, p['amount'], p['status'])
+                    for payment_id, p in payments.items()
+                    if p['status'] == 'pending'
+                ]
+            except json.JSONDecodeError:
+                logger.error("Ошибка при разборе файла payments.json.")
+    return []
+
+def add_promocode(code, discount, expires_at, max_uses):
+    os.makedirs(os.path.dirname(PROMOCODES_FILE), exist_ok=True)
+    promocodes = {}
+    if os.path.exists(PROMOCODES_FILE):
+        with open(PROMOCODES_FILE, 'r') as f:
+            try:
+                promocodes = json.load(f)
+            except json.JSONDecodeError:
+                logger.error("Ошибка при разборе файла promocodes.json.")
+    if code in promocodes:
+        return False
+    promocodes[code] = {
+        'discount': discount,
+        'expires_at': expires_at.isoformat() if expires_at else None,
+        'max_uses': max_uses,
+        'uses': 0
+    }
+    with open(PROMOCODES_FILE, 'w') as f:
+        json.dump(promocodes, f)
+    return True
+
+def apply_promocode(code):
+    if os.path.exists(PROMOCODES_FILE):
+        with open(PROMOCODES_FILE, 'r') as f:
+            try:
+                promocodes = json.load(f)
+                if code in promocodes:
+                    promo = promocodes[code]
+                    now = datetime.now(UTC)
+                    expires_at = datetime.fromisoformat(promo['expires_at']).astimezone(UTC) if promo['expires_at'] else None
+                    if (not expires_at or now < expires_at) and (promo['max_uses'] is None or promo['uses'] < promo['max_uses']):
+                        promo['uses'] += 1
+                        with open(PROMOCODES_FILE, 'w') as f:
+                            json.dump(promocodes, f)
+                        return promo['discount']
+            except json.JSONDecodeError:
+                logger.error("Ошибка при разборе файла promocodes.json.")
+    return 0
+
+def remove_promocode(code):
+    if os.path.exists(PROMOCODES_FILE):
+        with open(PROMOCODES_FILE, 'r') as f:
+            try:
+                promocodes = json.load(f)
+                if code in promocodes:
+                    del promocodes[code]
+                    with open(PROMOCODES_FILE, 'w') as f:
+                        json.dump(promocodes, f)
+                    return True
+            except json.JSONDecodeError:
+                logger.error("Ошибка при разборе файла promocodes.json.")
+    return False
+
+def get_promocodes():
+    if os.path.exists(PROMOCODES_FILE):
+        with open(PROMOCODES_FILE, 'r') as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                logger.error("Ошибка при разборе файла promocodes.json.")
+    return {}
+
+def get_full_clients_table():
+    setting = get_config()
+    docker_container = setting['docker_container']
+    clients_table_path = '/opt/amnezia/awg/clientsTable'
+    try:
+        cmd = f"docker exec -i {docker_container} cat {clients_table_path}"
+        call = subprocess.check_output(cmd, shell=True)
+        return json.loads(call.decode('utf-8'))
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Ошибка при получении clientsTable: {e}")
+        return []
+    except json.JSONDecodeError:
+        logger.error("Ошибка при разборе clientsTable JSON.")
+        return []
