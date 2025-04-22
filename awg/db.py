@@ -6,11 +6,12 @@ import pytz
 import socket
 import logging
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 
 EXPIRATIONS_FILE = 'files/expirations.json'
 PAYMENTS_FILE = 'files/payments.json'
-ADMINS_FILE = 'files/admins.json'  # Новый файл для хранения админов
+ADMINS_FILE = 'files/admins.json'
+PROMOCODES_FILE = 'files/promocodes.json'  # Новый файл для промокодов
 UTC = pytz.UTC
 
 logging.basicConfig(level=logging.INFO)
@@ -36,7 +37,7 @@ def create_config(path='files/setting.ini'):
 
     bot_token = input('Введите токен Telegram бота: ').strip()
     admin_ids_input = input('Введите Telegram ID администраторов через запятую (например, 12345, 67890): ').strip()
-    admin_ids = [admin_id.strip() for admin_id in admin_ids_input.split(',')]  # Список ID
+    admin_ids = [admin_id.strip() for admin_id in admin_ids_input.split(',')]
 
     docker_container = get_amnezia_container()
     logger.info(f"Найден Docker-контейнер: {docker_container}")
@@ -59,7 +60,7 @@ def create_config(path='files/setting.ini'):
         endpoint = input('Не удалось автоматически определить внешний IP-адрес. Введите его вручную: ').strip()
 
     config.set("setting", "bot_token", bot_token)
-    config.set("setting", "admin_ids", ','.join(admin_ids))  # Сохраняем как строку с разделителем
+    config.set("setting", "admin_ids", ','.join(admin_ids))
     config.set("setting", "docker_container", docker_container)
     config.set("setting", "wg_config_file", wg_config_file)
     config.set("setting", "endpoint", endpoint)
@@ -68,7 +69,6 @@ def create_config(path='files/setting.ini'):
         config.write(config_file)
     logger.info(f"Конфигурация сохранена в {path}")
 
-    # Инициализируем admins.json с начальными администраторами
     save_admins(admin_ids)
 
 def ensure_peer_names():
@@ -155,7 +155,7 @@ def get_config(path='files/setting.ini'):
     out = {}
     for key in config['setting']:
         if key == 'admin_ids':
-            out[key] = config['setting'][key].split(',')  # Парсим строку в список
+            out[key] = config['setting'][key].split(',')
         else:
             out[key] = config['setting'][key]
     return out
@@ -441,7 +441,68 @@ def get_all_payments():
         flat_payments.extend(user_payments)
     return flat_payments
 
-# Методы для управления администраторами
+def load_promocodes():
+    os.makedirs(os.path.dirname(PROMOCODES_FILE), exist_ok=True)
+    if not os.path.exists(PROMOCODES_FILE):
+        return {}
+    with open(PROMOCODES_FILE, 'r') as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            logger.error("Ошибка при загрузке promocodes.json.")
+            return {}
+
+def save_promocodes(promocodes):
+    os.makedirs(os.path.dirname(PROMOCODES_FILE), exist_ok=True)
+    with open(PROMOCODES_FILE, 'w') as f:
+        json.dump(promocodes, f, indent=4)
+
+def add_promocode(code: str, discount: float, expires_at: datetime = None, max_uses: int = None):
+    promocodes = load_promocodes()
+    if code in promocodes:
+        logger.error(f"Промокод {code} уже существует.")
+        return False
+    promocodes[code] = {
+        'discount': discount,  # Скидка в процентах (например, 10.0 для 10%)
+        'expires_at': expires_at.isoformat() if expires_at else None,
+        'max_uses': max_uses,
+        'uses': 0
+    }
+    save_promocodes(promocodes)
+    return True
+
+def validate_promocode(code: str):
+    promocodes = load_promocodes()
+    if code not in promocodes:
+        return None
+    promo = promocodes[code]
+    now = datetime.now(UTC)
+    if promo['expires_at'] and datetime.fromisoformat(promo['expires_at']).replace(tzinfo=UTC) < now:
+        return None
+    if promo['max_uses'] is not None and promo['uses'] >= promo['max_uses']:
+        return None
+    return promo
+
+def apply_promocode(code: str):
+    promocodes = load_promocodes()
+    promo = validate_promocode(code)
+    if not promo:
+        return False
+    promocodes[code]['uses'] += 1
+    save_promocodes(promocodes)
+    return promo['discount']
+
+def get_promocodes():
+    return load_promocodes()
+
+def remove_promocode(code: str):
+    promocodes = load_promocodes()
+    if code in promocodes:
+        del promocodes[code]
+        save_promocodes(promocodes)
+        return True
+    return False
+
 def load_admins():
     os.makedirs(os.path.dirname(ADMINS_FILE), exist_ok=True)
     if not os.path.exists(ADMINS_FILE):
