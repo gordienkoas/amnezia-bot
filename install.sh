@@ -105,9 +105,13 @@ install_and_configure_needrestart() {
 
 # Клонирование репозитория
 clone_repository() {
-    if [[ -d "amnezia-bot" ]]; then cd amnezia-bot; return; fi
+    # Если скрипт запущен внутри клонированного репозитория, пропускаем
+    if [[ -d ".git" ]]; then
+        echo -e "${YELLOW}Репозиторий уже присутствует, пропускаем клонирование...${NC}"
+        return
+    fi
     run_with_spinner "Клонирование репозитория" "git clone https://github.com/stevefoxru/amnezia-bot.git -q"
-    cd amnezia-bot
+    cd amnezia-bot || { echo -e "${RED}Не удалось перейти в каталог amnezia-bot${NC}"; exit 1; }
 }
 
 # Настройка виртуального окружения
