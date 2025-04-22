@@ -188,7 +188,8 @@ check_python() {
 
 # Установка зависимостей VPN-бота
 install_dependencies() {
-    run_with_spinner "Установка зависимостей" "apt-get install -y jq net-tools iptables resolvconf git curl sqlite3 -qq"
+    run_with_spinner "Установка зависимостей" "apt-get install -y jq net-tools iptables resolvconf git curl sqlite3 docker.io -qq"
+    run_with_spinner "Включение Docker" "systemctl enable docker && systemctl start docker"
 }
 
 # Установка и конфигурация needrestart
