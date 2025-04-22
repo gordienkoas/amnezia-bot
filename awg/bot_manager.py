@@ -1275,6 +1275,11 @@ async def check_payment_status():
                 user_main_messages[user_id].pop('pending_payment', None)
 
 if __name__ == '__main__':
-    asyncio.run(load_isp_cache())
-    scheduler.add_job(check_payment_status, IntervalTrigger(minutes=5))
-    executor.start_polling(dp, skip_updates=True)
+    import asyncio
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(load_isp_cache())
+        scheduler.add_job(check_payment_status, IntervalTrigger(minutes=5))
+        executor.start_polling(dp, skip_updates=True, loop=loop)
+    finally:
+        loop.close()
