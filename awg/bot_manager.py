@@ -50,7 +50,8 @@ ENDPOINT = endpoint
 PRICING = {
     '1_month': 10.0,
     '3_months': 25.0,
-    '6_months': 45.0
+    '6_months': 45.0,
+    '12_months': 80.0  # Добавлен 12-месячный период
 }
 
 class AdminMessageDeletionMiddleware(BaseMiddleware):
@@ -114,6 +115,34 @@ def get_settings_menu():
         InlineKeyboardButton("🗑️ Очистить старые ключи", callback_data="clear_old_keys"),
         InlineKeyboardButton("⬅️ Назад", callback_data="home")
     )
+    return markup
+
+# Клавиатура для выбора периода продления
+def get_renewal_period_keyboard(username):
+    markup = InlineKeyboardMarkup(row_width=2)
+    periods = [
+        ("1 месяц", "1_month"),
+        ("3 месяца", "3_months"),
+        ("6 месяцев", "6_months"),
+        ("12 месяцев", "12_months")
+    ]
+    for period_name, period_key in periods:
+        markup.add(InlineKeyboardButton(period_name, callback_data=f"renew_period_{username}_{period_key}"))
+    markup.add(InlineKeyboardButton("Отмена", callback_data="home"))
+    return markup
+
+# Клавиатура для выбора даты очистки ключей
+def get_clear_keys_date_keyboard():
+    markup = InlineKeyboardMarkup(row_width=2)
+    dates = [
+        ("1 месяц назад", (datetime.now(pytz.UTC) - timedelta(days=30)).isoformat()),
+        ("3 месяца назад", (datetime.now(pytz.UTC) - timedelta(days=90)).isoformat()),
+        ("6 месяцев назад", (datetime.now(pytz.UTC) - timedelta(days=180)).isoformat()),
+        ("1 год назад", (datetime.now(pytz.UTC) - timedelta(days=365)).isoformat())
+    ]
+    for date_name, date_iso in dates:
+        markup.add(InlineKeyboardButton(date_name, callback_data=f"clear_keys_date_{date_iso}"))
+    markup.add(InlineKeyboardButton("Отмена", callback_data="home"))
     return markup
 
 user_main_messages = {}
@@ -319,25 +348,6 @@ async def handle_messages(message: types.Message):
             'message_id': sent_message.message_id,
             'state': None
         }
-    elif user_state == 'waiting_for_renewal_period' and user_id in admins:
-        try:
-            username = user_main_messages[user_id]['renewal_username']
-            period = message.text.strip().lower()
-            if period not in PRICING:
-                await message.reply("Неверный период. Введите: 1_month, 3_months или 6_months.")
-                return
-            months = {'1_month': 1, '3_months': 3, '6_months': 6}[period]
-            expiration = datetime.now(pytz.UTC) + timedelta(days=30 * months)
-            db.set_user_expiration(username, expiration, "Неограниченно")
-            await message.reply(f"Подписка для {username} продлена до {expiration.strftime('%Y-%m-%d')}.")
-            sent_message = await message.answer("Выберите действие:", reply_markup=get_main_menu_markup(user_id))
-            user_main_messages[user_id] = {
-                'chat_id': sent_message.chat.id,
-                'message_id': sent_message.message_id,
-                'state': None
-            }
-        except Exception as e:
-            await message.reply(f"Ошибка при продлении: {str(e)}")
 
 @dp.callback_query_handler(lambda c: c.data == "settings")
 async def settings_menu_callback(callback_query: types.CallbackQuery):
@@ -371,8 +381,36 @@ async def clear_old_keys_callback(callback_query: types.CallbackQuery):
         await callback_query.answer("Нет прав.", show_alert=True)
         return
     try:
-        db.clear_old_keys(before_date='2024-01-01')
-        await bot.send_message(user_id, "Старые ключи удалены.", parse_mode="Markdown")
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Выберите дату, до которой удалить ключи:",
+        reply_markup=get_clear_keys_date_keyboard()
+    )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
+    await callback_query.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith('clear_keys_date_'))
+async def clear_keys_date_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    if user_id not in admins:
+        await callback_query.answer("Нет прав.", show_alert=True)
+        return
+    before_date = callback_query.data.split('clear_keys_date_')[1]
+    try:
+        if db.clear_old_keys(before_date):
+            await bot.send_message(user_id, f"Старые ключи до {before_date} удалены.", parse_mode="Markdown")
+        else:
+            await bot.send_message(user_id, "Не найдено ключей для удаления.", parse_mode="Markdown")
     except Exception as e:
         await bot.send_message(user_id, f"Ошибка при удалении ключей: {str(e)}")
     sent_message = await bot.send_message(
@@ -428,7 +466,7 @@ async def prompt_for_admin_id(callback_query: types.CallbackQuery):
     sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
         text="Введите Telegram ID нового админа:",
-        reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
+        reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("Отмена", callback_data="home"))
     )
     user_main_messages[user_id] = {
         'chat_id': sent_message.chat.id,
@@ -751,12 +789,19 @@ async def client_delete_callback(callback_query: types.CallbackQuery):
         await callback_query.answer("Нет прав.", show_alert=True)
         return
     username = callback_query.data.split('delete_user_')[1]
-    if db.deactive_user_db(username):
-        shutil.rmtree(os.path.join('users', username), ignore_errors=True)
-        db.remove_user_expiration(username)
-        text = f"Пользователь **{username}** удален."
-    else:
-        text = f"Не удалось удалить **{username}**."
+    try:
+        if db.deactive_user_db(username):
+            shutil.rmtree(os.path.join('users', username), ignore_errors=True)
+            db.remove_user_expiration(username)
+            db.set_user_telegram_id(username, None)  # Удаляем привязку Telegram ID
+            logger.info(f"Пользователь {username} успешно удалён.")
+            text = f"Пользователь **{username}** удалён."
+        else:
+            logger.error(f"Не удалось удалить пользователя {username} через db.deactive_user_db.")
+            text = f"Не удалось удалить **{username}**. Проверьте логи."
+    except Exception as e:
+        logger.error(f"Ошибка при удалении пользователя {username}: {str(e)}")
+        text = f"Ошибка при удалении **{username}**: {str(e)}"
     try:
         await bot.delete_message(
             chat_id=callback_query.message.chat.id,
@@ -793,14 +838,49 @@ async def renew_user_callback(callback_query: types.CallbackQuery):
         pass
     sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        text="Введите период продления (1_month, 3_months, 6_months):",
-        reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
+        text="Выберите период продления:",
+        reply_markup=get_renewal_period_keyboard(username)
     )
     user_main_messages[user_id] = {
         'chat_id': sent_message.chat.id,
         'message_id': sent_message.message_id,
-        'state': 'waiting_for_renewal_period',
-        'renewal_username': username
+        'state': None
+    }
+    await callback_query.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith('renew_period_'))
+async def renew_period_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    if user_id not in admins:
+        await callback_query.answer("Нет прав.", show_alert=True)
+        return
+    try:
+        username, period = callback_query.data.split('renew_period_')[1].split('_', 1)
+        months = {'1_month': 1, '3_months': 3, '6_months': 6, '12_months': 12}[period]
+        expiration = datetime.now(pytz.UTC) + timedelta(days=30 * months)
+        db.set_user_expiration(username, expiration, "Неограниченно")
+        text = f"Подписка для {username} продлена до {expiration.strftime('%Y-%m-%d %H:%M UTC')}."
+        logger.info(f"Подписка для {username} продлена на {period} до {expiration}.")
+    except Exception as e:
+        text = f"Ошибка при продлении: {str(e)}"
+        logger.error(f"Ошибка при продлении подписки для {username}: {str(e)}")
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text=text,
+        parse_mode="Markdown",
+        reply_markup=get_main_menu_markup(user_id)
+    )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
     }
     await callback_query.answer()
 
@@ -1038,6 +1118,7 @@ async def buy_key_callback(callback_query: types.CallbackQuery):
         InlineKeyboardButton("1 месяц - $10", callback_data="select_period_1_month"),
         InlineKeyboardButton("3 месяца - $25", callback_data="select_period_3_months"),
         InlineKeyboardButton("6 месяцев - $45", callback_data="select_period_6_months"),
+        InlineKeyboardButton("12 месяцев - $80", callback_data="select_period_12_months"),
         InlineKeyboardButton("🏠 Домой", callback_data="home")
     )
     try:
@@ -1245,7 +1326,7 @@ async def check_updates_callback(callback_query: types.CallbackQuery):
         elif "Обновление репозитория... Done!" in output:
             await bot.send_message(user_id, "Репозиторий успешно обновлён и служба перезапущена.", parse_mode="Markdown")
         else:
-            await bot.send_message(user_id, f"Ошибка проверки обновлений:\n```\n{output}\n```", parse_mode="Markdown")
+            await bot.send_message(user_idしゃふ"Ошибка проверки обновлений:\n```\n{output}\n```", parse_mode="Markdown")
     except Exception as e:
         await bot.send_message(user_id, f"Ошибка при проверке обновлений: {str(e)}")
     sent_message = await bot.send_message(
@@ -1312,7 +1393,7 @@ async def check_payment_status():
                 username = f"user_{user_id}_{uuid.uuid4().hex[:8]}"
                 success = db.root_add(username, ipv6=False)
                 if success:
-                    months = {'1_month': 1, '3_months': 3, '6_months': 6}[period]
+                    months = {'1_month': 1, '3_months': 3, '6_months': 6, '12_months': 12}[period]
                     expiration = datetime.now(pytz.UTC) + timedelta(days=30 * months)
                     db.set_user_expiration(username, expiration, "Неограниченно")
                     db.set_user_telegram_id(username, user_id)
