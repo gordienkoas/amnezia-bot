@@ -66,19 +66,15 @@ dp.middleware.setup(AdminMessageDeletionMiddleware())
 # Главное меню
 def get_main_menu_markup(user_id):
     markup = InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        InlineKeyboardButton("➕ Добавить пользователя", callback_data="add_user"),
-        InlineKeyboardButton("📋 Список клиентов", callback_data="list_users")
-    )
-    markup.add(
-        InlineKeyboardButton("🔑 Получить конфиг", callback_data="get_config"),
-        InlineKeyboardButton("ℹ️ Инструкция", callback_data="instructions")
-    )
-    markup.add(
-        InlineKeyboardButton("💳 Купить ключ", callback_data="buy_key"),
-        InlineKeyboardButton("🎟️ Использовать промокод", callback_data="use_promocode")
-    )
     if user_id in admins:
+        markup.add(
+            InlineKeyboardButton("➕ Добавить пользователя", callback_data="add_user"),
+            InlineKeyboardButton("📋 Список клиентов", callback_data="list_users")
+        )
+        markup.add(
+            InlineKeyboardButton("🔑 Получить конфиг", callback_data="get_config"),
+            InlineKeyboardButton("ℹ️ Инструкция", callback_data="instructions")
+        )
         markup.add(
             InlineKeyboardButton("👥 Список админов", callback_data="list_admins"),
             InlineKeyboardButton("👤 Добавить админа", callback_data="add_admin")
@@ -87,7 +83,24 @@ def get_main_menu_markup(user_id):
             InlineKeyboardButton("💾 Создать бекап", callback_data="create_backup"),
             InlineKeyboardButton("🎟️ Управление промокодами", callback_data="manage_promocodes")
         )
-        markup.add(InlineKeyboardButton("🔄 Проверить обновления", callback_data="check_updates"))
+        markup.add(
+            InlineKeyboardButton("🔄 Проверить обновления", callback_data="check_updates"),
+            InlineKeyboardButton("🔄 Перезагрузить VPN", callback_data="restart_vpn")
+        )
+    elif user_id in moderators:
+        markup.add(
+            InlineKeyboardButton("➕ Добавить пользователя", callback_data="add_user"),
+            InlineKeyboardButton("📋 Список клиентов", callback_data="list_users")
+        )
+        markup.add(
+            InlineKeyboardButton("🔑 Получить конфиг", callback_data="get_config"),
+            InlineKeyboardButton("ℹ️ Инструкция", callback_data="instructions")
+        )
+    else:
+        markup.add(
+            InlineKeyboardButton("💳 Купить ключ", callback_data="buy_key"),
+            InlineKeyboardButton("🎟️ Использовать промокод", callback_data="use_promocode")
+        )
     return markup
 
 user_main_messages = {}
@@ -161,26 +174,40 @@ def parse_relative_time(relative_str: str) -> datetime:
         logger.error(f"Ошибка в parse_relative_time: {str(e)}")
         return datetime.now(pytz.UTC)
 
+def parse_transfer(transfer_str: str) -> tuple:
+    try:
+        incoming, outgoing = transfer_str.split('/')
+        incoming_bytes = humanize.parse_bytes(incoming.strip())
+        outgoing_bytes = humanize.parse_bytes(outgoing.strip())
+        return incoming_bytes, outgoing_bytes
+    except:
+        return 0, 0
+
+async def generate_vpn_key(conf_path: str) -> str:
+    async with aiofiles.open(conf_path, 'r') as f:
+        config = await f.read()
+    config = config.replace(f'Endpoint = {ENDPOINT}', f'Endpoint = {ENDPOINT}')
+    return config
+
 @dp.message_handler(commands=['start', 'help'])
-async def help_command_handler(message: types.Message):
+async def start_command_handler(message: types.Message):
     user_id = message.from_user.id
-    if user_id in admins or user_id in moderators:
-        sent_message = await message.answer("Выберите действие:", reply_markup=get_main_menu_markup(user_id))
-        user_main_messages[user_id] = {
-            'chat_id': sent_message.chat.id,
-            'message_id': sent_message.message_id,
-            'state': None
-        }
-    else:
-        sent_message = await message.answer("Добро пожаловать! Купите ключ для доступа к VPN.", reply_markup=InlineKeyboardMarkup().add(
-            InlineKeyboardButton("💳 Купить ключ", callback_data="buy_key"),
-            InlineKeyboardButton("🎟️ Использовать промокод", callback_data="use_promocode")
-        ))
-        user_main_messages[user_id] = {
-            'chat_id': sent_message.chat.id,
-            'message_id': sent_message.message_id,
-            'state': None
-        }
+    # Удаляем старое сообщение с меню, если оно существует
+    if user_id in user_main_messages:
+        try:
+            await bot.delete_message(
+                chat_id=user_main_messages[user_id]['chat_id'],
+                message_id=user_main_messages[user_id]['message_id']
+            )
+        except:
+            pass
+    # Отправляем новое сообщение с меню
+    sent_message = await message.answer("Выберите действие:", reply_markup=get_main_menu_markup(user_id))
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
 
 @dp.message_handler(commands=['add_admin'])
 async def add_admin_command(message: types.Message):
@@ -216,13 +243,13 @@ async def handle_messages(message: types.Message):
                 with open(conf_path, 'rb') as config:
                     config_message = await bot.send_document(user_id, config, caption=caption, parse_mode="Markdown")
                     await bot.pin_chat_message(user_id, config_message.message_id, disable_notification=True)
-        await bot.edit_message_text(
-            chat_id=user_main_messages[user_id]['chat_id'],
-            message_id=user_main_messages[user_id]['message_id'],
-            text="Выберите действие:",
-            reply_markup=get_main_menu_markup(user_id)
-        )
-        user_main_messages[user_id]['state'] = None
+        # Отправляем новое сообщение с меню
+        sent_message = await message.answer("Выберите действие:", reply_markup=get_main_menu_markup(user_id))
+        user_main_messages[user_id] = {
+            'chat_id': sent_message.chat.id,
+            'message_id': sent_message.message_id,
+            'state': None
+        }
     elif user_state == 'waiting_for_admin_id' and user_id in admins:
         try:
             new_admin_id = int(message.text.strip())
@@ -231,13 +258,12 @@ async def handle_messages(message: types.Message):
                 admins.append(new_admin_id)
                 await message.reply(f"Админ {new_admin_id} добавлен.")
                 await bot.send_message(new_admin_id, "Вы назначены администратором!")
-            await bot.edit_message_text(
-                chat_id=user_main_messages[user_id]['chat_id'],
-                message_id=user_main_messages[user_id]['message_id'],
-                text="Выберите действие:",
-                reply_markup=get_main_menu_markup(user_id)
-            )
-            user_main_messages[user_id]['state'] = None
+            sent_message = await message.answer("Выберите действие:", reply_markup=get_main_menu_markup(user_id))
+            user_main_messages[user_id] = {
+                'chat_id': sent_message.chat.id,
+                'message_id': sent_message.message_id,
+                'state': None
+            }
         except:
             await message.reply("Введите корректный Telegram ID.")
     elif user_state == 'waiting_for_promocode':
@@ -248,13 +274,12 @@ async def handle_messages(message: types.Message):
             await message.reply(f"Промокод активирован! Скидка: {discount}%")
         else:
             await message.reply("Неверный или истёкший промокод.")
-        await bot.edit_message_text(
-            chat_id=user_main_messages[user_id]['chat_id'],
-            message_id=user_main_messages[user_id]['message_id'],
-            text="Выберите действие:",
-            reply_markup=get_main_menu_markup(user_id)
-        )
-        user_main_messages[user_id]['state'] = None
+        sent_message = await message.answer("Выберите действие:", reply_markup=get_main_menu_markup(user_id))
+        user_main_messages[user_id] = {
+            'chat_id': sent_message.chat.id,
+            'message_id': sent_message.message_id,
+            'state': None
+        }
     elif user_state == 'waiting_for_new_promocode' and user_id in admins:
         try:
             code, discount, days_valid, max_uses = message.text.strip().split()
@@ -268,13 +293,31 @@ async def handle_messages(message: types.Message):
                 await message.reply("Промокод уже существует.")
         except:
             await message.reply("Формат: <код> <скидка%> <дней_действия> <макс_использований|none>")
-        await bot.edit_message_text(
-            chat_id=user_main_messages[user_id]['chat_id'],
-            message_id=user_main_messages[user_id]['message_id'],
-            text="Выберите действие:",
-            reply_markup=get_main_menu_markup(user_id)
-        )
-        user_main_messages[user_id]['state'] = None
+        sent_message = await message.answer("Выберите действие:", reply_markup=get_main_menu_markup(user_id))
+        user_main_messages[user_id] = {
+            'chat_id': sent_message.chat.id,
+            'message_id': sent_message.message_id,
+            'state': None
+        }
+    elif user_state == 'waiting_for_renewal_period' and user_id in admins:
+        try:
+            username = user_main_messages[user_id]['renewal_username']
+            period = message.text.strip().lower()
+            if period not in PRICING:
+                await message.reply("Неверный период. Введите: 1_month, 3_months или 6_months.")
+                return
+            months = {'1_month': 1, '3_months': 3, '6_months': 6}[period]
+            expiration = datetime.now(pytz.UTC) + timedelta(days=30 * months)
+            db.set_user_expiration(username, expiration, "Неограниченно")
+            await message.reply(f"Подписка для {username} продлена до {expiration.strftime('%Y-%m-%d')}.")
+            sent_message = await message.answer("Выберите действие:", reply_markup=get_main_menu_markup(user_id))
+            user_main_messages[user_id] = {
+                'chat_id': sent_message.chat.id,
+                'message_id': sent_message.message_id,
+                'state': None
+            }
+        except Exception as e:
+            await message.reply(f"Ошибка при продлении: {str(e)}")
 
 @dp.callback_query_handler(lambda c: c.data == "add_user")
 async def prompt_for_user_name(callback_query: types.CallbackQuery):
@@ -282,13 +325,24 @@ async def prompt_for_user_name(callback_query: types.CallbackQuery):
     if user_id not in admins and user_id not in moderators:
         await callback_query.answer("Нет прав.", show_alert=True)
         return
-    await bot.edit_message_text(
+    # Удаляем старое сообщение
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text="Введите имя пользователя:",
         reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
     )
-    user_main_messages[user_id]['state'] = 'waiting_for_user_name'
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': 'waiting_for_user_name'
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "add_admin")
@@ -297,13 +351,23 @@ async def prompt_for_admin_id(callback_query: types.CallbackQuery):
     if user_id not in admins:
         await callback_query.answer("Нет прав.", show_alert=True)
         return
-    await bot.edit_message_text(
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text="Введите Telegram ID нового админа:",
         reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
     )
-    user_main_messages[user_id]['state'] = 'waiting_for_admin_id'
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': 'waiting_for_admin_id'
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data.startswith('client_'))
@@ -327,7 +391,10 @@ async def client_selected_callback(callback_query: types.CallbackQuery):
         ipv4_address = "—"
         expiration = db.get_user_expiration(username)
         expiration_text = expiration.strftime("%Y-%m-%d %H:%M UTC") if expiration else "Не установлен"
-        
+        # Предполагается, что db.get_user_telegram_id возвращает Telegram ID или username
+        # Если метода нет, нужно добавить в db.py функцию, которая возвращает Telegram ID, связанный с username
+        telegram_id = db.get_user_telegram_id(username) or "Не указан"  # Замените на реальный вызов, если есть
+
         if isinstance(client_info, (tuple, list)) and len(client_info) > 2 and client_info[2] is not None:
             ip_match = re.search(r'(\d{1,3}\.){3}\d{1,3}/\d+', str(client_info[2]))
             ipv4_address = ip_match.group(0) if ip_match else "—"
@@ -352,6 +419,7 @@ async def client_selected_callback(callback_query: types.CallbackQuery):
         
         text = (
             f"📧 *Имя:* {username}\n"
+            f"👤 *Пользователь:* {telegram_id}\n"
             f"🌐 *IPv4:* {ipv4_address}\n"
             f"🌐 *Статус:* {status}\n"
             f"🔼 *Исходящий:* {incoming_traffic}\n"
@@ -363,30 +431,47 @@ async def client_selected_callback(callback_query: types.CallbackQuery):
             InlineKeyboardButton("ℹ️ IP info", callback_data=f"ip_info_{username}"),
             InlineKeyboardButton("🔗 Подключения", callback_data=f"connections_{username}"),
             InlineKeyboardButton("🗑️ Удалить", callback_data=f"delete_user_{username}"),
+            InlineKeyboardButton("🔄 Продлить", callback_data=f"renew_user_{username}"),
             InlineKeyboardButton("⬅️ Назад", callback_data="list_users"),
             InlineKeyboardButton("🏠 Домой", callback_data="home")
         )
         
-        await bot.edit_message_text(
+        # Отправляем новое сообщение вместо редактирования
+        try:
+            await bot.delete_message(
+                chat_id=callback_query.message.chat.id,
+                message_id=callback_query.message.message_id
+            )
+        except:
+            pass
+        sent_message = await bot.send_message(
             chat_id=callback_query.message.chat.id,
-            message_id=callback_query.message.message_id,
             text=text,
             parse_mode="Markdown",
             reply_markup=keyboard
         )
+        user_main_messages[user_id] = {
+            'chat_id': sent_message.chat.id,
+            'message_id': sent_message.message_id,
+            'state': None
+        }
         await callback_query.answer()
     
     except Exception as e:
         logger.error(f"Ошибка в client_selected_callback: {str(e)}")
-        await bot.edit_message_text(
+        sent_message = await bot.send_message(
             chat_id=callback_query.message.chat.id,
-            message_id=callback_query.message.message_id,
             text=f"Ошибка при загрузке профиля: {str(e)}",
             reply_markup=InlineKeyboardMarkup().add(
                 InlineKeyboardButton("⬅️ Назад", callback_data="list_users"),
                 InlineKeyboardButton("🏠 Домой", callback_data="home")
             )
         )
+        user_main_messages[user_id] = {
+            'chat_id': sent_message.chat.id,
+            'message_id': sent_message.message_id,
+            'state': None
+        }
         await callback_query.answer("Ошибка на сервере.", show_alert=True)
 
 @dp.callback_query_handler(lambda c: c.data == "list_users")
@@ -399,14 +484,25 @@ async def list_users_callback(callback_query: types.CallbackQuery):
     try:
         clients = db.get_client_list()
         if not clients:
-            await bot.edit_message_text(
+            try:
+                await bot.delete_message(
+                    chat_id=callback_query.message.chat.id,
+                    message_id=callback_query.message.message_id
+                )
+            except:
+                pass
+            sent_message = await bot.send_message(
                 chat_id=callback_query.message.chat.id,
-                message_id=callback_query.message.message_id,
                 text="Список клиентов пуст.",
                 reply_markup=InlineKeyboardMarkup().add(
                     InlineKeyboardButton("🏠 Домой", callback_data="home")
                 )
             )
+            user_main_messages[user_id] = {
+                'chat_id': sent_message.chat.id,
+                'message_id': sent_message.message_id,
+                'state': None
+            }
             await callback_query.answer()
             return
         
@@ -421,24 +517,39 @@ async def list_users_callback(callback_query: types.CallbackQuery):
         
         keyboard.add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
         
-        await bot.edit_message_text(
+        try:
+            await bot.delete_message(
+                chat_id=callback_query.message.chat.id,
+                message_id=callback_query.message.message_id
+            )
+        except:
+            pass
+        sent_message = await bot.send_message(
             chat_id=callback_query.message.chat.id,
-            message_id=callback_query.message.message_id,
             text="Выберите пользователя:",
             reply_markup=keyboard
         )
+        user_main_messages[user_id] = {
+            'chat_id': sent_message.chat.id,
+            'message_id': sent_message.message_id,
+            'state': None
+        }
         await callback_query.answer()
     
     except Exception as e:
         logger.error(f"Ошибка в list_users_callback: {str(e)}")
-        await bot.edit_message_text(
+        sent_message = await bot.send_message(
             chat_id=callback_query.message.chat.id,
-            message_id=callback_query.message.message_id,
             text=f"Ошибка: {str(e)}",
             reply_markup=InlineKeyboardMarkup().add(
                 InlineKeyboardButton("🏠 Домой", callback_data="home")
             )
         )
+        user_main_messages[user_id] = {
+            'chat_id': sent_message.chat.id,
+            'message_id': sent_message.message_id,
+            'state': None
+        }
         await callback_query.answer("Ошибка на сервере.", show_alert=True)
 
 @dp.callback_query_handler(lambda c: c.data == "list_admins")
@@ -451,12 +562,23 @@ async def list_admins_callback(callback_query: types.CallbackQuery):
     for admin_id in admins:
         keyboard.insert(InlineKeyboardButton(f"🗑️ Удалить {admin_id}", callback_data=f"remove_admin_{admin_id}"))
     keyboard.add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
-    await bot.edit_message_text(
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text=f"Администраторы:\n" + "\n".join(f"- {admin_id}" for admin_id in admins),
         reply_markup=keyboard
     )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data.startswith('remove_admin_'))
@@ -496,13 +618,24 @@ async def client_connections_callback(callback_query: types.CallbackQuery):
         InlineKeyboardButton("⬅️ Назад", callback_data=f"client_{username}"),
         InlineKeyboardButton("🏠 Домой", callback_data="home")
     )
-    await bot.edit_message_text(
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text=text,
         parse_mode="Markdown",
         reply_markup=keyboard
     )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data.startswith('ip_info_'))
@@ -527,13 +660,24 @@ async def ip_info_callback(callback_query: types.CallbackQuery):
         InlineKeyboardButton("⬅️ Назад", callback_data=f"client_{username}"),
         InlineKeyboardButton("🏠 Домой", callback_data="home")
     )
-    await bot.edit_message_text(
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text=text,
         parse_mode="Markdown",
         reply_markup=keyboard
     )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data.startswith('delete_user_'))
@@ -549,25 +693,73 @@ async def client_delete_callback(callback_query: types.CallbackQuery):
         text = f"Пользователь **{username}** удален."
     else:
         text = f"Не удалось удалить **{username}**."
-    await bot.edit_message_text(
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text=text,
         parse_mode="Markdown",
         reply_markup=get_main_menu_markup(user_id)
     )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
+    await callback_query.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith('renew_user_'))
+async def renew_user_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    if user_id not in admins:
+        await callback_query.answer("Нет прав.", show_alert=True)
+        return
+    username = callback_query.data.split('renew_user_')[1]
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Введите период продления (1_month, 3_months, 6_months):",
+        reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
+    )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': 'waiting_for_renewal_period',
+        'renewal_username': username
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "home")
 async def return_home(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
-    user_main_messages[user_id]['state'] = None
-    await bot.edit_message_text(
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text="Выберите действие:",
         reply_markup=get_main_menu_markup(user_id)
     )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "get_config")
@@ -585,12 +777,23 @@ async def list_users_for_config(callback_query: types.CallbackQuery):
     for client in clients:
         keyboard.insert(InlineKeyboardButton(client[0], callback_data=f"send_config_{client[0]}"))
     keyboard.add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
-    await bot.edit_message_text(
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text="Выберите пользователя:",
         reply_markup=keyboard
     )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data.startswith('send_config_'))
@@ -609,6 +812,17 @@ async def send_user_config(callback_query: types.CallbackQuery):
             await bot.pin_chat_message(user_id, config_message.message_id, disable_notification=True)
     else:
         await bot.send_message(user_id, f"Конфигурация для **{username}** не найдена.", parse_mode="Markdown")
+    # Отправляем новое меню
+    sent_message = await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Выберите действие:",
+        reply_markup=get_main_menu_markup(user_id)
+    )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "create_backup")
@@ -631,6 +845,17 @@ async def create_backup_callback(callback_query: types.CallbackQuery):
     with open(backup_filename, 'rb') as f:
         await bot.send_document(user_id, f, caption=backup_filename)
     os.remove(backup_filename)
+    # Отправляем новое меню
+    sent_message = await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Выберите действие:",
+        reply_markup=get_main_menu_markup(user_id)
+    )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "instructions")
@@ -644,12 +869,23 @@ async def show_instructions(callback_query: types.CallbackQuery):
         InlineKeyboardButton("💻 Для компьютеров", callback_data="pc_instructions"),
         InlineKeyboardButton("🏠 Домой", callback_data="home")
     )
-    await bot.edit_message_text(
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text="Выберите тип устройства для инструкции:",
         reply_markup=keyboard
     )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "mobile_instructions")
@@ -672,13 +908,24 @@ async def mobile_instructions(callback_query: types.CallbackQuery):
         InlineKeyboardButton("⬅️ Назад", callback_data="instructions"),
         InlineKeyboardButton("🏠 Домой", callback_data="home")
     )
-    await bot.edit_message_text(
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text=instruction_text,
         parse_mode="Markdown",
         reply_markup=keyboard
     )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "pc_instructions")
@@ -700,13 +947,24 @@ async def pc_instructions(callback_query: types.CallbackQuery):
         InlineKeyboardButton("⬅️ Назад", callback_data="instructions"),
         InlineKeyboardButton("🏠 Домой", callback_data="home")
     )
-    await bot.edit_message_text(
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text=instruction_text,
         parse_mode="Markdown",
         reply_markup=keyboard
     )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "buy_key")
@@ -718,12 +976,23 @@ async def buy_key_callback(callback_query: types.CallbackQuery):
         InlineKeyboardButton("6 месяцев - $45", callback_data="select_period_6_months"),
         InlineKeyboardButton("🏠 Домой", callback_data="home")
     )
-    await bot.edit_message_text(
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text="Выберите период подписки:",
         reply_markup=keyboard
     )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data.startswith('select_period_'))
@@ -744,29 +1013,50 @@ async def select_period_callback(callback_query: types.CallbackQuery):
         InlineKeyboardButton("⬅️ Назад", callback_data="buy_key"),
         InlineKeyboardButton("🏠 Домой", callback_data="home")
     )
-    await bot.edit_message_text(
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text=f"Подписка на {period.replace('_', ' ')}: ${final_price:.2f} (скидка {discount}%)\nОплатите по ссылке:",
         reply_markup=keyboard
     )
-    user_main_messages[user_id]['pending_payment'] = {
-        'payment_id': payment_id,
-        'period': period,
-        'username': None
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None,
+        'pending_payment': {
+            'payment_id': payment_id,
+            'period': period,
+            'username': None
+        }
     }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "use_promocode")
 async def use_promocode_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
-    await bot.edit_message_text(
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text="Введите промокод:",
         reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
     )
-    user_main_messages[user_id]['state'] = 'waiting_for_promocode'
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': 'waiting_for_promocode'
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "manage_promocodes")
@@ -785,12 +1075,23 @@ async def manage_promocodes_callback(callback_query: types.CallbackQuery):
         InlineKeyboardButton("🗑️ Удалить промокод", callback_data="delete_promocode"),
         InlineKeyboardButton("🏠 Домой", callback_data="home")
     )
-    await bot.edit_message_text(
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text=text,
         reply_markup=keyboard
     )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "add_promocode")
@@ -799,13 +1100,23 @@ async def add_promocode_callback(callback_query: types.CallbackQuery):
     if user_id not in admins:
         await callback_query.answer("Нет прав.", show_alert=True)
         return
-    await bot.edit_message_text(
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text="Введите промокод в формате: <код> <скидка%> <дней_действия> <макс_использований|none>",
         reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
     )
-    user_main_messages[user_id]['state'] = 'waiting_for_new_promocode'
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': 'waiting_for_new_promocode'
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "delete_promocode")
@@ -819,12 +1130,23 @@ async def delete_promocode_callback(callback_query: types.CallbackQuery):
     for code in promocodes:
         keyboard.insert(InlineKeyboardButton(f"🗑️ {code}", callback_data=f"remove_promocode_{code}"))
     keyboard.add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
-    await bot.edit_message_text(
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text="Выберите промокод для удаления:",
         reply_markup=keyboard
     )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data.startswith('remove_promocode_'))
@@ -859,123 +1181,100 @@ async def check_updates_callback(callback_query: types.CallbackQuery):
         elif "Обновление репозитория... Done!" in output:
             await bot.send_message(user_id, "Репозиторий успешно обновлён и служба перезапущена.", parse_mode="Markdown")
         else:
-            await bot.send_message(user_id, f"Результат проверки обновлений:\n```\n{output}\n```", parse_mode="Markdown")
+            await bot.send_message(user_id, f"Ошибка проверки обновлений:\n```\n{output}\n```", parse_mode="Markdown")
     except Exception as e:
         await bot.send_message(user_id, f"Ошибка при проверке обновлений: {str(e)}")
-    await bot.edit_message_text(
+    # Отправляем новое меню
+    sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        message_id=callback_query.message.message_id,
         text="Выберите действие:",
         reply_markup=get_main_menu_markup(user_id)
     )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
     await callback_query.answer()
 
-async def check_expired_keys():
-    now = datetime.now(pytz.UTC)
-    for user, expiration, _ in db.get_users_with_expiration():
-        if expiration and datetime.fromisoformat(expiration).replace(tzinfo=pytz.UTC) < now:
-            db.deactive_user_db(user)
-            shutil.rmtree(os.path.join('users', user), ignore_errors=True)
-            db.remove_user_expiration(user)
-            logger.info(f"Пользователь {user} деактивирован из-за истечения срока действия.")
-
-async def check_payment_status():
-    payments = db.get_all_payments()
-    for payment in payments:
-        if payment['status'] == 'pending':
-            db.update_payment_status(payment['payment_id'], 'completed')
-            user_id = payment['user_id']
-            if user_id in user_main_messages and 'pending_payment' in user_main_messages[user_id]:
-                pending = user_main_messages[user_id]['pending_payment']
-                period = pending['period']
-                months = {'1_month': 1, '3_months': 3, '6_months': 6}[period]
-                expiration = datetime.now(pytz.UTC) + timedelta(days=30 * months)
-                
-                username = f"user_{user_id}_{uuid.uuid4().hex[:8]}"
-                success = db.root_add(username, ipv6=False)
-                if success:
-                    db.set_user_expiration(username, expiration, "Неограниченно")
-                    conf_path = os.path.join('users', username, f'{username}.conf')
-                    if os.path.exists(conf_path):
-                        vpn_key = await generate_vpn_key(conf_path)
-                        caption = f"Ваш ключ для {username} (действует до {expiration.strftime('%Y-%m-%d')}):\nAmneziaVPN:\n[Google Play](https://play.google.com/store/apps/details?id=org.amnezia.vpn&hl=ru)\n[GitHub](https://github.com/amnezia-vpn/amnezia-client)\n```\n{vpn_key}\n```"
-                        with open(conf_path, 'rb') as config:
-                            config_message = await bot.send_document(user_id, config, caption=caption, parse_mode="Markdown")
-                            await bot.pin_chat_message(user_id, config_message.message_id, disable_notification=True)
-                user_main_messages[user_id].pop('pending_payment', None)
-                user_main_messages[user_id].pop('promocode_discount', None)
-
-async def auto_check_updates():
+@dp.callback_query_handler(lambda c: c.data == "restart_vpn")
+async def restart_vpn_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    if user_id not in admins:
+        await callback_query.answer("Нет прав.", show_alert=True)
+        return
     try:
+        # Проверяем, существует ли контейнер
         process = await asyncio.create_subprocess_exec(
-            '/root/install.sh', '--check-update',
+            'docker', 'ps', '-q', '-f', f'name={DOCKER_CONTAINER}',
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await process.communicate()
-        output = stdout.decode().strip() + stderr.decode().strip()
-        if "Доступно обновление" in output:
-            for admin_id in admins:
-                await bot.send_message(admin_id, f"Обнаружено обновление:\n```\n{output}\n```", parse_mode="Markdown")
+        if not stdout.decode().strip():
+            await bot.send_message(user_id, f"Контейнер {DOCKER_CONTAINER} не найден.", parse_mode="Markdown")
+        else:
+            # Перезапускаем контейнер
+            process = await asyncio.create_subprocess_exec(
+                'docker', 'restart', DOCKER_CONTAINER,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            if process.returncode == 0:
+                await bot.send_message(user_id, f"VPN-контейнер {DOCKER_CONTAINER} успешно перезапущен.", parse_mode="Markdown")
+            else:
+                await bot.send_message(user_id, f"Ошибка при перезапуске VPN:\n```\n{stderr.decode().strip()}\n```", parse_mode="Markdown")
     except Exception as e:
-        logger.error(f"Ошибка при автоматической проверке обновлений: {str(e)}")
-
-def parse_transfer(transfer_str):
-    if not isinstance(transfer_str, str) or not transfer_str.strip():
-        logger.error(f"Некорректный transfer_str: {transfer_str}")
-        return 0, 0
-    try:
-        incoming, outgoing = re.split(r'[/,]', transfer_str)[:2]
-        size_map = {'B': 1, 'KB': 10**3, 'KiB': 1024, 'MB': 10**6, 'MiB': 1024**2, 'GB': 10**9, 'GiB': 1024**3}
-        incoming_bytes = outgoing_bytes = 0
-        for unit, multiplier in size_map.items():
-            if unit in incoming:
-                match = re.match(r'([\d.]+)', incoming)
-                if match:
-                    incoming_bytes = float(match.group(0)) * multiplier
-            if unit in outgoing:
-                match = re.match(r'([\d.]+)', outgoing)
-                if match:
-                    outgoing_bytes = float(match.group(0)) * multiplier
-        return incoming_bytes, outgoing_bytes
-    except Exception as e:
-        logger.error(f"Ошибка в parse_transfer: {str(e)}")
-        return 0, 0
-
-async def generate_vpn_key(conf_path: str) -> str:
-    process = await asyncio.create_subprocess_exec(
-        'python3.11', 'awg-decode.py', '--encode', conf_path,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        await bot.send_message(user_id, f"Ошибка при перезапуске VPN: {str(e)}")
+    # Отправляем новое меню
+    sent_message = await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Выберите действие:",
+        reply_markup=get_main_menu_markup(user_id)
     )
-    stdout, stderr = await process.communicate()
-    return stdout.decode().strip() if process.returncode == 0 and stdout.decode().startswith('vpn://') else ""
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
+    await callback_query.answer()
 
-async def check_environment():
-    if DOCKER_CONTAINER not in subprocess.check_output(f"docker ps --filter 'name={DOCKER_CONTAINER}' --format '{{{{.Names}}}}'", shell=True).decode().strip().split('\n'):
-        logger.error(f"Контейнер '{DOCKER_CONTAINER}' не найден.")
-        return False
-    subprocess.check_call(f"docker exec {DOCKER_CONTAINER} test -f {WG_CONFIG_FILE}", shell=True)
-    return True
-
-async def on_startup(dp):
-    os.makedirs('files/connections', exist_ok=True)
-    os.makedirs('users', exist_ok=True)
-    await load_isp_cache()
-    if not await check_environment():
-        for admin_id in admins:
-            await bot.send_message(admin_id, "Ошибка инициализации AmneziaVPN.")
-        await bot.close()
-        sys.exit(1)
-    if not db.get_admins():
-        logger.error("Список админов пуст.")
-        sys.exit(1)
-    scheduler.add_job(db.ensure_peer_names, IntervalTrigger(minutes=1))
-    scheduler.add_job(check_expired_keys, IntervalTrigger(minutes=5))
-    scheduler.add_job(check_payment_status, IntervalTrigger(minutes=1))
-    scheduler.add_job(auto_check_updates, IntervalTrigger(hours=24))
-
-async def on_shutdown(dp):
-    scheduler.shutdown()
+async def check_payment_status():
+    payments = db.get_pending_payments()
+    for user_id, payment_id, amount, _ in payments:
+        # Здесь должна быть интеграция с платежной системой для проверки статуса
+        # Для примера предполагаем, что статус изменился на 'completed'
+        payment_status = 'completed'  # Замените на реальную проверку
+        if payment_status == 'completed':
+            db.update_payment_status(payment_id, 'completed')
+            pending_payment = user_main_messages.get(user_id, {}).get('pending_payment', {})
+            if pending_payment and pending_payment['payment_id'] == payment_id:
+                period = pending_payment['period']
+                username = f"user_{user_id}_{uuid.uuid4().hex[:8]}"
+                success = db.root_add(username, ipv6=False)
+                if success:
+                    months = {'1_month': 1, '3_months': 3, '6_months': 6}[period]
+                    expiration = datetime.now(pytz.UTC) + timedelta(days=30 * months)
+                    db.set_user_expiration(username, expiration, "Неограниченно")
+                    # Сохраняем Telegram ID пользователя в базе
+                    # Если db.set_user_telegram_id не существует, добавьте метод в db.py
+                    db.set_user_telegram_id(username, user_id)  # Раскомментируйте, если метод есть
+                    conf_path = os.path.join('users', username, f'{username}.conf')
+                    if os.path.exists(conf_path):
+                        vpn_key = await generate_vpn_key(conf_path)
+                        caption = f"Ваш VPN ключ ({period.replace('_', ' ')}):\nAmneziaVPN:\n[Google Play](https://play.google.com/store/apps/details?id=org.amnezia.vpn&hl=ru)\n[GitHub](https://github.com/amnezia-vpn/amnezia-client)\n```\n{vpn_key}\n```"
+                        with open(conf_path, 'rb') as config:
+                            config_message = await bot.send_document(user_id, config, caption=caption, parse_mode="Markdown")
+                            await bot.pin_chat_message(user_id, config_message.message_id, disable_notification=True)
+                        await bot.send_message(user_id, "Оплата подтверждена! Ваш VPN ключ отправлен.")
+                    else:
+                        await bot.send_message(user_id, "Ошибка: конфигурация не найдена. Обратитесь к администратору.")
+                else:
+                    await bot.send_message(user_id, "Ошибка при создании пользователя. Обратитесь к администратору.")
+                user_main_messages[user_id].pop('pending_payment', None)
 
 if __name__ == '__main__':
-    executor.start_polling(dp, on_startup=on_startup, on_shutdown=on_shutdown)
+    asyncio.run(load_isp_cache())
+    scheduler.add_job(check_payment_status, IntervalTrigger(minutes=5))
+    executor.start_polling(dp, skip_updates=True)
