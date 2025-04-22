@@ -854,8 +854,10 @@ async def check_updates_callback(callback_query: types.CallbackQuery):
         )
         stdout, stderr = await process.communicate()
         output = stdout.decode().strip() + stderr.decode().strip()
-        if "Failed" in output or "error:" in output:
-            await bot.send_message(user_id, f"Ошибка обновления:\n```\n{output}\n```\nПожалуйста, проверьте конфликты вручную.", parse_mode="Markdown")
+        if "Репозиторий актуален" in output:
+            await bot.send_message(user_id, "Репозиторий актуален, обновления не требуются.", parse_mode="Markdown")
+        elif "Обновление репозитория... Done!" in output:
+            await bot.send_message(user_id, "Репозиторий успешно обновлён и служба перезапущена.", parse_mode="Markdown")
         else:
             await bot.send_message(user_id, f"Результат проверки обновлений:\n```\n{output}\n```", parse_mode="Markdown")
     except Exception as e:
