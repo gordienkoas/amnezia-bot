@@ -1,11 +1,12 @@
-cat << 'EOF' > /root/install.sh
 #!/bin/bash
 
+# Конфигурация
 SERVICE_NAME="awg_bot"
 REPO_URL="https://github.com/stevefoxru/amnezia-bot.git"
 REPO_API="https://api.github.com/repos/stevefoxru/amnezia-bot"
 LOCAL_VERSION_FILE="/root/amnezia-bot/.version"
 
+# Цвета для вывода
 GREEN=$'\033[0;32m'
 YELLOW=$'\033[1;33m'
 RED=$'\033[0;31m'
@@ -237,13 +238,13 @@ check_config() {
         read -p "Введите Telegram ID администраторов через запятую (например, 12345,67890): " admin_ids
         read -p "Введите endpoint VPN (например, vpn.example.com:51820): " endpoint
         mkdir -p files || error_exit "Не удалось создать директорию files"
-        cat <<EOF > files/setting.ini
+        cat << EOF > files/setting.ini
 [Settings]
-bot_token = \$bot_token
-admin_ids = \$admin_ids
+bot_token = $bot_token
+admin_ids = $admin_ids
 wg_config_file = /root/amnezia-bot/awg/files/wg0.conf
 docker_container = amnezia-awg
-endpoint = \$endpoint
+endpoint = $endpoint
 EOF
         echo -e "${GREEN}Конфигурация сохранена в files/setting.ini${NC}"
     fi
@@ -269,19 +270,19 @@ initialize_bot() {
     cd awg || error_exit "Каталог awg не найден"
     if [[ ! -f "files/setting.ini" ]]; then
         ../myenv/bin/python3.11 bot_manager.py < /dev/tty &
-        local PID=\$!
+        local PID=$!
         while [[ ! -f "files/setting.ini" ]]; do
             sleep 2
-            kill -0 "\$PID" 2>/dev/null || error_exit "Ошибка инициализации бота"
+            kill -0 "$PID" 2>/dev/null || error_exit "Ошибка инициализации бота"
         done
-        kill "\$PID" && wait "\$PID" 2>/dev/null
+        kill "$PID" && wait "$PID" 2>/dev/null
     fi
     cd ..
 }
 
 # Создание systemd-сервиса
 create_service() {
-    cat > /tmp/service_file <<EOF
+    cat << EOF > /tmp/service_file
 [Unit]
 Description=AmneziaVPN Docker Telegram Bot
 After=network.target
@@ -296,17 +297,17 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 EOF
-    run_with_spinner "Установка службы" "mv /tmp/service_file /etc/systemd/system/\$SERVICE_NAME.service"
+    run_with_spinner "Установка службы" "mv /tmp/service_file /etc/systemd/system/$SERVICE_NAME.service"
     run_with_spinner "Обновление systemd" "systemctl daemon-reload"
-    run_with_spinner "Запуск службы" "systemctl start \$SERVICE_NAME"
-    run_with_spinner "Включение автозапуска" "systemctl enable \$SERVICE_NAME"
+    run_with_spinner "Запуск службы" "systemctl start $SERVICE_NAME"
+    run_with_spinner "Включение автозапуска" "systemctl enable $SERVICE_NAME"
 }
 
 # Удаление AmneziaWG
 remove_amneziawg() {
     echo -ne "${YELLOW}Удалить AmneziaWG? (y/n): ${NC}"; read ans
-    [[ "\$ans" =~ ^[Yy]\$ ]] || return
-    systemctl is-active --quiet "\$SERVICE_NAME" && run_with_spinner "Остановка" "systemctl stop \$SERVICE_NAME"
+    [[ "$ans" =~ ^[Yy]$ ]] || return
+    systemctl is-active --quiet "$SERVICE_NAME" && run_with_spinner "Остановка" "systemctl stop $SERVICE_NAME"
     run_with_spinner "Удаление контейнеров" "docker ps -aq -f name=amnezia-wg | xargs -r docker rm -f"
     run_with_spinner "Удаление образов" "docker images -q amneziawg/amnezia-wg | uniq | xargs -r docker rmi -f"
     run_with_spinner "Удаление конфигов" "rm -rf /root/amnezia-bot/awg/files"
@@ -316,14 +317,14 @@ remove_amneziawg() {
 service_control_menu() {
     while true; do
         echo -e "\n${BLUE}Управление службой${NC}"
-        systemctl status "\$SERVICE_NAME" | grep -E "Active:|Loaded:"
+        systemctl status "$SERVICE_NAME" | grep -E "Active:|Loaded:"
         echo -e "1) Остановить 2) Перезапустить 3) Переустановить 4) Удалить службу 5) Удалить AmneziaWG 6) Проверить обновления 7) Назад"
         echo -ne "${BLUE}Выберите: ${NC}"; read act
-        case \$act in
-            1) run_with_spinner "Остановка" "systemctl stop \$SERVICE_NAME" ;;
-            2) run_with_spinner "Перезапуск" "systemctl restart \$SERVICE_NAME" ;;
+        case $act in
+            1) run_with_spinner "Остановка" "systemctl stop $SERVICE_NAME" ;;
+            2) run_with_spinner "Перезапуск" "systemctl restart $SERVICE_NAME" ;;
             3) reinstall_bot ;;
-            4) run_with_spinner "Удаление службы" "systemctl disable \$SERVICE_NAME && rm /etc/systemd/system/\$SERVICE_NAME.service && systemctl daemon-reload" ;;
+            4) run_with_spinner "Удаление службы" "systemctl disable $SERVICE_NAME && rm /etc/systemd/system/$SERVICE_NAME.service && systemctl daemon-reload" ;;
             5) remove_amneziawg ;;
             6) check_updates ;;
             7) break ;;
@@ -335,9 +336,9 @@ service_control_menu() {
 # Переустановка бота
 reinstall_bot() {
     echo -ne "${YELLOW}Переустановить бота? (y/n): ${NC}"; read ans
-    [[ "\$ans" =~ ^[Yy]\$ ]] || return
-    systemctl is-active --quiet "\$SERVICE_NAME" && run_with_spinner "Остановка" "systemctl stop \$SERVICE_NAME"
-    systemctl list-units --type=service --all | grep -q "\$SERVICE_NAME.service" && run_with_spinner "Удаление службы" "systemctl disable \$SERVICE_NAME && rm /etc/systemd/system/\$SERVICE_NAME.service && systemctl daemon-reload"
+    [[ "$ans" =~ ^[Yy]$ ]] || return
+    systemctl is-active --quiet "$SERVICE_NAME" && run_with_spinner "Остановка" "systemctl stop $SERVICE_NAME"
+    systemctl list-units --type=service --all | grep -q "$SERVICE_NAME.service" && run_with_spinner "Удаление службы" "systemctl disable $SERVICE_NAME && rm /etc/systemd/system/$SERVICE_NAME.service && systemctl daemon-reload"
     run_with_spinner "Удаление файлов" "rm -rf /root/amnezia-bot"
     install_bot
 }
@@ -347,7 +348,7 @@ installed_menu() {
     while true; do
         echo -e "\n${GREEN}1) Проверить обновления 2) Управление службой 3) Переустановить 4) Выход${NC}"
         echo -ne "${BLUE}Выберите: ${NC}"; read opt
-        case \$opt in
+        case $opt in
             1) check_updates ;;
             2) service_control_menu ;;
             3) reinstall_bot ;;
@@ -369,14 +370,14 @@ install_bot() {
     set_permissions
     initialize_bot
     create_service
-    cp "\$SCRIPT_PATH" "/root/amnezia-bot/install.sh" && chmod +x "/root/amnezia-bot/install.sh"
+    cp "$SCRIPT_PATH" "/root/amnezia-bot/install.sh" && chmod +x "/root/amnezia-bot/install.sh"
     echo -e "${GREEN}Установка завершена!${NC}"
 }
 
 # Точка входа
 main() {
     get_ubuntu_version
-    if systemctl list-units --type=service --all | grep -q "\$SERVICE_NAME.service"; then
+    if systemctl list-units --type=service --all | grep -q "$SERVICE_NAME.service"; then
         installed_menu
     else
         install_bot
@@ -384,5 +385,3 @@ main() {
 }
 
 main
-EOF
-chmod +x /root/install.sh
