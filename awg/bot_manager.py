@@ -84,8 +84,8 @@ def get_main_menu_markup(user_id):
             InlineKeyboardButton("🎟️ Управление промокодами", callback_data="manage_promocodes")
         )
         markup.add(
-            InlineKeyboardButton("🔄 Проверить обновления", callback_data="check_updates"),
-            InlineKeyboardButton("🔄 Перезагрузить VPN", callback_data="restart_vpn")
+            InlineKeyboardButton("⚙️ Настройки", callback_data="settings"),
+            InlineKeyboardButton("🏠 Домой", callback_data="home")
         )
     elif user_id in moderators:
         markup.add(
@@ -101,6 +101,19 @@ def get_main_menu_markup(user_id):
             InlineKeyboardButton("💳 Купить ключ", callback_data="buy_key"),
             InlineKeyboardButton("🎟️ Использовать промокод", callback_data="use_promocode")
         )
+    return markup
+
+# Меню настроек для админов
+def get_settings_menu():
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("🔄 Проверить обновления", callback_data="check_updates"),
+        InlineKeyboardButton("🔄 Перезагрузить VPN", callback_data="restart_vpn")
+    )
+    markup.add(
+        InlineKeyboardButton("🗑️ Очистить старые ключи", callback_data="clear_old_keys"),
+        InlineKeyboardButton("⬅️ Назад", callback_data="home")
+    )
     return markup
 
 user_main_messages = {}
@@ -184,10 +197,17 @@ def parse_transfer(transfer_str: str) -> tuple:
         return 0, 0
 
 async def generate_vpn_key(conf_path: str) -> str:
-    async with aiofiles.open(conf_path, 'r') as f:
-        config = await f.read()
-    config = config.replace(f'Endpoint = {ENDPOINT}', f'Endpoint = {ENDPOINT}')
-    return config
+    """Преобразует .conf в формат vpn:// с помощью awg-decode.py."""
+    process = await asyncio.create_subprocess_exec(
+        'python3.11', '/root/amnezia-bot/awg/awg-decode.py', '--encode', conf_path,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await process.communicate()
+    if process.returncode == 0 and stdout.decode().startswith('vpn://'):
+        return stdout.decode().strip()
+    else:
+        logger.error(f"Ошибка генерации vpn://: {stderr.decode()}")
+        return ""
 
 @dp.message_handler(commands=['start', 'help'])
 async def start_command_handler(message: types.Message):
@@ -319,13 +339,60 @@ async def handle_messages(message: types.Message):
         except Exception as e:
             await message.reply(f"Ошибка при продлении: {str(e)}")
 
+@dp.callback_query_handler(lambda c: c.data == "settings")
+async def settings_menu_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    if user_id not in admins:
+        await callback_query.answer("Нет прав.", show_alert=True)
+        return
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Настройки:",
+        reply_markup=get_settings_menu()
+    )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
+    await callback_query.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "clear_old_keys")
+async def clear_old_keys_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    if user_id not in admins:
+        await callback_query.answer("Нет прав.", show_alert=True)
+        return
+    try:
+        db.clear_old_keys(before_date='2024-01-01')
+        await bot.send_message(user_id, "Старые ключи удалены.", parse_mode="Markdown")
+    except Exception as e:
+        await bot.send_message(user_id, f"Ошибка при удалении ключей: {str(e)}")
+    sent_message = await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Выберите действие:",
+        reply_markup=get_main_menu_markup(user_id)
+    )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
+    await callback_query.answer()
+
 @dp.callback_query_handler(lambda c: c.data == "add_user")
 async def prompt_for_user_name(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins and user_id not in moderators:
         await callback_query.answer("Нет прав.", show_alert=True)
         return
-    # Удаляем старое сообщение
     try:
         await bot.delete_message(
             chat_id=callback_query.message.chat.id,
@@ -391,9 +458,7 @@ async def client_selected_callback(callback_query: types.CallbackQuery):
         ipv4_address = "—"
         expiration = db.get_user_expiration(username)
         expiration_text = expiration.strftime("%Y-%m-%d %H:%M UTC") if expiration else "Не установлен"
-        # Предполагается, что db.get_user_telegram_id возвращает Telegram ID или username
-        # Если метода нет, нужно добавить в db.py функцию, которая возвращает Telegram ID, связанный с username
-        telegram_id = db.get_user_telegram_id(username) or "Не указан"  # Замените на реальный вызов, если есть
+        telegram_id = db.get_user_telegram_id(username) or "Не указан"
 
         if isinstance(client_info, (tuple, list)) and len(client_info) > 2 and client_info[2] is not None:
             ip_match = re.search(r'(\d{1,3}\.){3}\d{1,3}/\d+', str(client_info[2]))
@@ -436,7 +501,6 @@ async def client_selected_callback(callback_query: types.CallbackQuery):
             InlineKeyboardButton("🏠 Домой", callback_data="home")
         )
         
-        # Отправляем новое сообщение вместо редактирования
         try:
             await bot.delete_message(
                 chat_id=callback_query.message.chat.id,
@@ -1184,7 +1248,6 @@ async def check_updates_callback(callback_query: types.CallbackQuery):
             await bot.send_message(user_id, f"Ошибка проверки обновлений:\n```\n{output}\n```", parse_mode="Markdown")
     except Exception as e:
         await bot.send_message(user_id, f"Ошибка при проверке обновлений: {str(e)}")
-    # Отправляем новое меню
     sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
         text="Выберите действие:",
@@ -1204,7 +1267,6 @@ async def restart_vpn_callback(callback_query: types.CallbackQuery):
         await callback_query.answer("Нет прав.", show_alert=True)
         return
     try:
-        # Проверяем, существует ли контейнер
         process = await asyncio.create_subprocess_exec(
             'docker', 'ps', '-q', '-f', f'name={DOCKER_CONTAINER}',
             stdout=asyncio.subprocess.PIPE,
@@ -1214,7 +1276,6 @@ async def restart_vpn_callback(callback_query: types.CallbackQuery):
         if not stdout.decode().strip():
             await bot.send_message(user_id, f"Контейнер {DOCKER_CONTAINER} не найден.", parse_mode="Markdown")
         else:
-            # Перезапускаем контейнер
             process = await asyncio.create_subprocess_exec(
                 'docker', 'restart', DOCKER_CONTAINER,
                 stdout=asyncio.subprocess.PIPE,
@@ -1227,7 +1288,6 @@ async def restart_vpn_callback(callback_query: types.CallbackQuery):
                 await bot.send_message(user_id, f"Ошибка при перезапуске VPN:\n```\n{stderr.decode().strip()}\n```", parse_mode="Markdown")
     except Exception as e:
         await bot.send_message(user_id, f"Ошибка при перезапуске VPN: {str(e)}")
-    # Отправляем новое меню
     sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
         text="Выберите действие:",
@@ -1243,8 +1303,6 @@ async def restart_vpn_callback(callback_query: types.CallbackQuery):
 async def check_payment_status():
     payments = db.get_pending_payments()
     for user_id, payment_id, amount, _ in payments:
-        # Здесь должна быть интеграция с платежной системой для проверки статуса
-        # Для примера предполагаем, что статус изменился на 'completed'
         payment_status = 'completed'  # Замените на реальную проверку
         if payment_status == 'completed':
             db.update_payment_status(payment_id, 'completed')
@@ -1257,9 +1315,7 @@ async def check_payment_status():
                     months = {'1_month': 1, '3_months': 3, '6_months': 6}[period]
                     expiration = datetime.now(pytz.UTC) + timedelta(days=30 * months)
                     db.set_user_expiration(username, expiration, "Неограниченно")
-                    # Сохраняем Telegram ID пользователя в базе
-                    # Если db.set_user_telegram_id не существует, добавьте метод в db.py
-                    db.set_user_telegram_id(username, user_id)  # Раскомментируйте, если метод есть
+                    db.set_user_telegram_id(username, user_id)
                     conf_path = os.path.join('users', username, f'{username}.conf')
                     if os.path.exists(conf_path):
                         vpn_key = await generate_vpn_key(conf_path)
