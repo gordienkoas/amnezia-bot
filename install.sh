@@ -249,7 +249,7 @@ check_updates() {
         echo -e "${RED}Репозиторий не найден. Пожалуйста, установите бот сначала.${NC}"
         return 1
     fi
-    check_github_updates
+    check_github_updates --auto
 }
 
 # Удаление AmneziaWG
