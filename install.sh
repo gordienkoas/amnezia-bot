@@ -232,22 +232,16 @@ setup_python_env() {
 # Проверка наличия bot_manager.py и настройка структуры
 check_bot_files() {
     echo -e "${BLUE}Проверка наличия bot_manager.py...${NC}"
-    
-    # Проверка, существует ли каталог awg
     if [[ ! -d "awg" ]]; then
         echo -e "${YELLOW}Каталог awg не найден. Создаём...${NC}"
         mkdir -p awg || error_exit "Не удалось создать каталог awg"
     fi
-    
-    # Проверка bot_manager.py в каталоге awg
     if [[ -f "awg/bot_manager.py" ]]; then
         echo -e "${GREEN}Найден bot_manager.py в awg${NC}"
     else
-        # Проверка bot_manager.py в корне репозитория
         if [[ -f "bot_manager.py" ]]; then
             echo -e "${YELLOW}Найден bot_manager.py в корне. Перемещаем в awg...${NC}"
             mv bot_manager.py awg/ || error_exit "Не удалось переместить bot_manager.py в awg"
-            # Перемещение других возможных файлов
             for file in db.py awg-decode.py newclient.sh removeclient.sh; do
                 if [[ -f "$file" ]]; then
                     mv "$file" awg/ || echo -e "${YELLOW}Не удалось переместить $file в awg${NC}"
