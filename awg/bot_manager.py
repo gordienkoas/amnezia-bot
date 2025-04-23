@@ -325,6 +325,7 @@ async def add_admin_command(message: types.Message):
 
 @dp.message_handler()
 async def handle_messages(message: types.Message):
+    global PRICING  # Объявляем PRICING глобальной в начале функции
     user_id = message.from_user.id
     user_state = user_main_messages.get(user_id, {}).get('state')
     
@@ -452,7 +453,6 @@ async def handle_messages(message: types.Message):
             if price <= 0:
                 raise ValueError("Цена должна быть положительной.")
             db.set_pricing(period, price)
-            global PRICING
             PRICING[period] = price
             await message.reply(f"Цена для {period.replace('_', ' ')} обновлена: ₽{price:.2f}")
         except:
