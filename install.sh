@@ -229,13 +229,40 @@ setup_python_env() {
     echo -e "${GREEN}Настройка Python окружения... Done!${NC}"
 }
 
-# Проверка и создание конфигурации
-check_config() {
-    # Проверка и создание каталога awg
+# Проверка наличия bot_manager.py и настройка структуры
+check_bot_files() {
+    echo -e "${BLUE}Проверка наличия bot_manager.py...${NC}"
+    
+    # Проверка, существует ли каталог awg
     if [[ ! -d "awg" ]]; then
         echo -e "${YELLOW}Каталог awg не найден. Создаём...${NC}"
         mkdir -p awg || error_exit "Не удалось создать каталог awg"
     fi
+    
+    # Проверка bot_manager.py в каталоге awg
+    if [[ -f "awg/bot_manager.py" ]]; then
+        echo -e "${GREEN}Найден bot_manager.py в awg${NC}"
+    else
+        # Проверка bot_manager.py в корне репозитория
+        if [[ -f "bot_manager.py" ]]; then
+            echo -e "${YELLOW}Найден bot_manager.py в корне. Перемещаем в awg...${NC}"
+            mv bot_manager.py awg/ || error_exit "Не удалось переместить bot_manager.py в awg"
+            # Перемещение других возможных файлов
+            for file in db.py awg-decode.py newclient.sh removeclient.sh; do
+                if [[ -f "$file" ]]; then
+                    mv "$file" awg/ || echo -e "${YELLOW}Не удалось переместить $file в awg${NC}"
+                fi
+            done
+        else
+            echo -e "${RED}Файл bot_manager.py не найден ни в awg, ни в корне репозитория${NC}"
+            echo -e "${RED}Проверьте содержимое репозитория: $REPO_URL${NC}"
+            error_exit "Отсутствует необходимый файл bot_manager.py"
+        fi
+    fi
+}
+
+# Проверка и создание конфигурации
+check_config() {
     cd awg || error_exit "Не удалось перейти в каталог awg"
     echo -e "${BLUE}Проверка конфигурации...${NC}"
     if [[ ! -f "files/setting.ini" ]]; then
@@ -273,11 +300,6 @@ set_permissions() {
 
 # Инициализация бота для генерации config
 initialize_bot() {
-    # Проверка и создание каталога awg
-    if [[ ! -d "awg" ]]; then
-        echo -e "${YELLOW}Каталог awg не найден. Создаём...${NC}"
-        mkdir -p awg || error_exit "Не удалось создать каталог awg"
-    fi
     cd awg || error_exit "Не удалось перейти в каталог awg"
     if [[ ! -f "files/setting.ini" ]]; then
         if [[ -f "bot_manager.py" ]]; then
@@ -289,7 +311,7 @@ initialize_bot() {
             done
             kill "$PID" && wait "$PID" 2>/dev/null
         else
-            echo -e "${RED}Файл bot_manager.py не найден в каталоге awg. Проверьте репозиторий: $REPO_URL${NC}"
+            echo -e "${RED}Файл bot_manager.py не найден в awg${NC}"
             error_exit "Отсутствует необходимый файл bot_manager.py"
         fi
     fi
@@ -382,6 +404,7 @@ install_bot() {
     install_dependencies
     install_and_configure_needrestart
     clone_repository
+    check_bot_files
     setup_python_env
     set_permissions
     initialize_bot
