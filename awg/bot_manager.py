@@ -22,6 +22,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from yoomoney import Client, Quickpay  # Добавляем YooMoney
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,8 +35,10 @@ moderator_ids = setting.get('moderator_ids', [])
 wg_config_file = setting.get('wg_config_file')
 docker_container = setting.get('docker_container')
 endpoint = setting.get('endpoint')
+yoomoney_token = setting.get('yoomoney_token')  # Токен YooMoney
+yoomoney_wallet = setting.get('yoomoney_wallet')  # Номер кошелька YooMoney
 
-if not all([bot_token, admin_ids, wg_config_file, docker_container, endpoint]):
+if not all([bot_token, admin_ids, wg_config_file, docker_container, endpoint, yoomoney_token, yoomoney_walletseverity=ERROR]):
     logger.error("Некоторые обязательные настройки отсутствуют.")
     sys.exit(1)
 
@@ -45,13 +48,14 @@ bot = Bot(bot_token)
 WG_CONFIG_FILE = wg_config_file
 DOCKER_CONTAINER = docker_container
 ENDPOINT = endpoint
+yoomoney_client = Client(yoomoney_token)  # Инициализация YooMoney
 
-# Цены за периоды (в условных единицах)
+# Цены за периоды (в рублях для YooMoney)
 PRICING = {
-    '1_month': 10.0,
-    '3_months': 25.0,
-    '6_months': 45.0,
-    '12_months': 80.0  # Добавлен 12-месячный период
+    '1_month': 1000.0,  # Изменено на рубли
+    '3_months': 2500.0,
+    '6_months': 4500.0,
+    '12_months': 8000.0
 }
 
 class AdminMessageDeletionMiddleware(BaseMiddleware):
@@ -64,7 +68,7 @@ scheduler = AsyncIOScheduler(timezone=pytz.UTC)
 scheduler.start()
 dp.middleware.setup(AdminMessageDeletionMiddleware())
 
-# Главное меню
+# Главное меню (удалены "Список админов", "Добавить админа", "Создать бэкап")
 def get_main_menu_markup(user_id):
     markup = InlineKeyboardMarkup(row_width=2)
     if user_id in admins:
@@ -77,17 +81,10 @@ def get_main_menu_markup(user_id):
             InlineKeyboardButton("ℹ️ Инструкция", callback_data="instructions")
         )
         markup.add(
-            InlineKeyboardButton("👥 Список админов", callback_data="list_admins"),
-            InlineKeyboardButton("👤 Добавить админа", callback_data="add_admin")
+            InlineKeyboardButton("🎟️ Управление промокодами", callback_data="manage_promocodes"),
+            InlineKeyboardButton("⚙️ Настройки", callback_data="settings")
         )
-        markup.add(
-            InlineKeyboardButton("💾 Создать бекап", callback_data="create_backup"),
-            InlineKeyboardButton("🎟️ Управление промокодами", callback_data="manage_promocodes")
-        )
-        markup.add(
-            InlineKeyboardButton("⚙️ Настройки", callback_data="settings"),
-            InlineKeyboardButton("🏠 Домой", callback_data="home")
-        )
+        markup.add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
     elif user_id in moderators:
         markup.add(
             InlineKeyboardButton("➕ Добавить пользователя", callback_data="add_user"),
@@ -104,7 +101,7 @@ def get_main_menu_markup(user_id):
         )
     return markup
 
-# Меню настроек для админов
+# Меню настроек (добавлены админы и бэкап)
 def get_settings_menu():
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -113,8 +110,13 @@ def get_settings_menu():
     )
     markup.add(
         InlineKeyboardButton("🗑️ Очистить старые ключи", callback_data="clear_old_keys"),
-        InlineKeyboardButton("⬅️ Назад", callback_data="home")
+        InlineKeyboardButton("💾 Создать бэкап", callback_data="create_backup")
     )
+    markup.add(
+        InlineKeyboardButton("👥 Список админов", callback_data="list_admins"),
+        InlineKeyboardButton("👤 Добавить админа", callback_data="add_admin")
+    )
+    markup.add(InlineKeyboardButton("⬅️ Назад", callback_data="home"))
     return markup
 
 # Клавиатура для выбора периода продления
@@ -238,10 +240,28 @@ async def generate_vpn_key(conf_path: str) -> str:
         logger.error(f"Ошибка генерации vpn://: {stderr.decode()}")
         return ""
 
+async def issue_vpn_key(user_id: int, period: str) -> bool:
+    """Выдача VPN-ключа пользователю."""
+    username = f"user_{user_id}_{uuid.uuid4().hex[:8]}"
+    success = db.root_add(username, ipv6=False)
+    if success:
+        months = {'1_month': 1, '3_months': 3, '6_months': 6, '12_months': 12}[period]
+        expiration = datetime.now(pytz.UTC) + timedelta(days=30 * months)
+        db.set_user_expiration(username, expiration, "Неограниченно")
+        db.set_user_telegram_id(username, user_id)
+        conf_path = os.path.join('users', username, f'{username}.conf')
+        if os.path.exists(conf_path):
+            vpn_key = await generate_vpn various_key(conf_path)
+            caption = f"Ваш VPN ключ ({period.replace('_', ' ')}):\nAmneziaVPN:\n[Google Play](https://play.google.com/store/apps/details?id=org.amnezia.vpn&hl=ru)\n[GitHub](https://github.com/amnezia-vpn/amnezia-client)\n```\n{vpn_key}\n```"
+            with open(conf_path, 'rb') as config:
+                config_message = await bot.send_document(user_id, config, caption=caption, parse_mode="Markdown")
+                await bot.pin_chat_message(user_id, config_message.message_id, disable_notification=True)
+            return True
+    return False
+
 @dp.message_handler(commands=['start', 'help'])
 async def start_command_handler(message: types.Message):
     user_id = message.from_user.id
-    # Удаляем старое сообщение с меню, если оно существует
     if user_id in user_main_messages:
         try:
             await bot.delete_message(
@@ -250,7 +270,6 @@ async def start_command_handler(message: types.Message):
             )
         except:
             pass
-    # Отправляем новое сообщение с меню
     sent_message = await message.answer("Выберите действие:", reply_markup=get_main_menu_markup(user_id))
     user_main_messages[user_id] = {
         'chat_id': sent_message.chat.id,
@@ -292,7 +311,6 @@ async def handle_messages(message: types.Message):
                 with open(conf_path, 'rb') as config:
                     config_message = await bot.send_document(user_id, config, caption=caption, parse_mode="Markdown")
                     await bot.pin_chat_message(user_id, config_message.message_id, disable_notification=True)
-        # Отправляем новое сообщение с меню
         sent_message = await message.answer("Выберите действие:", reply_markup=get_main_menu_markup(user_id))
         user_main_messages[user_id] = {
             'chat_id': sent_message.chat.id,
@@ -317,10 +335,19 @@ async def handle_messages(message: types.Message):
             await message.reply("Введите корректный Telegram ID.")
     elif user_state == 'waiting_for_promocode':
         promocode = message.text.strip()
-        discount = db.apply_promocode(promocode)
-        if discount:
-            user_main_messages[user_id]['promocode_discount'] = discount
-            await message.reply(f"Промокод активирован! Скидка: {discount}%")
+        promocode_data = db.apply_promocode(promocode)
+        if promocode_data:
+            discount = promocode_data.get('discount', 0)
+            subscription_period = promocode_data.get('subscription_period')
+            if subscription_period:  # Промокод для выдачи ключа
+                success = await issue_vpn_key(user_id, subscription_period)
+                if success:
+                    await message.reply(f"Промокод активирован! VPN ключ на {subscription_period.replace('_', ' ')} выдан.")
+                else:
+                    await message.reply("Ошибка при выдаче ключа. Обратитесь к администратору.")
+            else:  # Промокод на скидку
+                user_main_messages[user_id]['promocode_discount'] = discount
+                await message.reply(f"Промокод активирован! Скидка: {discount}%")
         else:
             await message.reply("Неверный или истёкший промокод.")
         sent_message = await message.answer("Выберите действие:", reply_markup=get_main_menu_markup(user_id))
@@ -331,17 +358,28 @@ async def handle_messages(message: types.Message):
         }
     elif user_state == 'waiting_for_new_promocode' and user_id in admins:
         try:
-            code, discount, days_valid, max_uses = message.text.strip().split()
+            parts = message.text.strip().split()
+            if len(parts) != 5:
+                raise ValueError("Неверный формат")
+            code, discount, days_valid, max_uses, subscription_period = parts
             discount = float(discount)
             days_valid = int(days_valid)
             max_uses = int(max_uses) if max_uses.lower() != 'none' else None
+            if subscription_period not in PRICING and subscription_period.lower() != 'none':
+                raise ValueError("Неверный период подписки")
+            subscription_period = None if subscription_period.lower() == 'none' else subscription_period
             expires_at = datetime.now(pytz.UTC) + timedelta(days=days_valid) if days_valid > 0 else None
-            if db.add_promocode(code, discount, expires_at, max_uses):
-                await message.reply(f"Промокод {code} добавлен: скидка {discount}%, действует {days_valid} дней, макс. использований: {max_uses or 'неограничено'}")
+            if db.add_promocode(code, discount, expires_at, max_uses, subscription_period):
+                await message.reply(
+                    f"Промокод {code} добавлен: скидка {discount}%, действует {days_valid} дней, "
+                    f"макс. использований: {max_uses or 'неограничено'}, подписка: {subscription_period or 'нет'}"
+                )
             else:
                 await message.reply("Промокод уже существует.")
         except:
-            await message.reply("Формат: <код> <скидка%> <дней_действия> <макс_использований|none>")
+            await message.reply(
+                "Формат: <код> <скидка%> <дней_действия> <макс_использований|none> <период_подписки|none>"
+            )
         sent_message = await message.answer("Выберите действие:", reply_markup=get_main_menu_markup(user_id))
         user_main_messages[user_id] = {
             'chat_id': sent_message.chat.id,
@@ -663,7 +701,7 @@ async def list_admins_callback(callback_query: types.CallbackQuery):
     keyboard = InlineKeyboardMarkup(row_width=2)
     for admin_id in admins:
         keyboard.insert(InlineKeyboardButton(f"🗑️ Удалить {admin_id}", callback_data=f"remove_admin_{admin_id}"))
-    keyboard.add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
+    keyboard.add(InlineKeyboardButton("⬅️ Назад", callback_data="settings"))
     try:
         await bot.delete_message(
             chat_id=callback_query.message.chat.id,
@@ -793,7 +831,7 @@ async def client_delete_callback(callback_query: types.CallbackQuery):
         if db.deactive_user_db(username):
             shutil.rmtree(os.path.join('users', username), ignore_errors=True)
             db.remove_user_expiration(username)
-            db.set_user_telegram_id(username, None)  # Удаляем привязку Telegram ID
+            db.set_user_telegram_id(username, None)
             logger.info(f"Пользователь {username} успешно удалён.")
             text = f"Пользователь **{username}** удалён."
         else:
@@ -956,7 +994,6 @@ async def send_user_config(callback_query: types.CallbackQuery):
             await bot.pin_chat_message(user_id, config_message.message_id, disable_notification=True)
     else:
         await bot.send_message(user_id, f"Конфигурация для **{username}** не найдена.", parse_mode="Markdown")
-    # Отправляем новое меню
     sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
         text="Выберите действие:",
@@ -989,7 +1026,6 @@ async def create_backup_callback(callback_query: types.CallbackQuery):
     with open(backup_filename, 'rb') as f:
         await bot.send_document(user_id, f, caption=backup_filename)
     os.remove(backup_filename)
-    # Отправляем новое меню
     sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
         text="Выберите действие:",
@@ -1115,10 +1151,10 @@ async def pc_instructions(callback_query: types.CallbackQuery):
 async def buy_key_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     keyboard = InlineKeyboardMarkup(row_width=2).add(
-        InlineKeyboardButton("1 месяц - $10", callback_data="select_period_1_month"),
-        InlineKeyboardButton("3 месяца - $25", callback_data="select_period_3_months"),
-        InlineKeyboardButton("6 месяцев - $45", callback_data="select_period_6_months"),
-        InlineKeyboardButton("12 месяцев - $80", callback_data="select_period_12_months"),
+        InlineKeyboardButton("1 месяц - ₽1000", callback_data="select_period_1_month"),
+        InlineKeyboardButton("3 месяца - ₽2500", callback_data="select_period_3_months"),
+        InlineKeyboardButton("6 месяцев - ₽4500", callback_data="select_period_6_months"),
+        InlineKeyboardButton("12 месяцев - ₽8000", callback_data="select_period_12_months"),
         InlineKeyboardButton("🏠 Домой", callback_data="home")
     )
     try:
@@ -1151,7 +1187,15 @@ async def select_period_callback(callback_query: types.CallbackQuery):
     payment_id = str(uuid.uuid4())
     db.add_payment(user_id, payment_id, final_price, 'pending')
     
-    payment_url = f"https://example.com/pay/{payment_id}"  # Замените на реальный URL платежной системы
+    quickpay = Quickpay(
+        receiver=yoomoney_wallet,
+        quickpay_form="shop",
+        targets=f"VPN Subscription {period}",
+        paymentType="SB",
+        sum=final_price,
+        label=payment_id
+    )
+    payment_url = quickpay.redirected_url
     
     keyboard = InlineKeyboardMarkup().add(
         InlineKeyboardButton("💳 Оплатить", url=payment_url),
@@ -1167,7 +1211,7 @@ async def select_period_callback(callback_query: types.CallbackQuery):
         pass
     sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        text=f"Подписка на {period.replace('_', ' ')}: ${final_price:.2f} (скидка {discount}%)\nОплатите по ссылке:",
+        text=f"Подписка на {period.replace('_', ' ')}: ₽{final_price:.2f} (скидка {discount}%)\nОплатите по ссылке:",
         reply_markup=keyboard
     )
     user_main_messages[user_id] = {
@@ -1206,13 +1250,13 @@ async def use_promocode_callback(callback_query: types.CallbackQuery):
 
 @dp.callback_query_handler(lambda c: c.data == "manage_promocodes")
 async def manage_promocodes_callback(callback_query: types.CallbackQuery):
-    user_id = callback_query.from_user.id
+    user_id = callback(nameof): callback_query.from_user.id
     if user_id not in admins:
         await callback_query.answer("Нет прав.", show_alert=True)
         return
     promocodes = db.get_promocodes()
     text = "Промокоды:\n" + "\n".join(
-        f"{code}: {info['discount']}% (использовано {info['uses']}/{info['max_uses'] or '∞'}, до {info['expires_at'] or 'неограничено'})"
+        f"{code}: {info['discount']}% (использовано {info['uses']}/{info['max_uses'] or '∞'}, до {info['expires_at'] or 'неограничено'}, подписка: {info['subscription_period'] or 'нет'})"
         for code, info in promocodes.items()
     ) if promocodes else "Промокоды отсутствуют."
     keyboard = InlineKeyboardMarkup(row_width=2).add(
@@ -1254,7 +1298,7 @@ async def add_promocode_callback(callback_query: types.CallbackQuery):
         pass
     sent_message = await bot.send_message(
         chat_id=callback_query.message.chat.id,
-        text="Введите промокод в формате: <код> <скидка%> <дней_действия> <макс_использований|none>",
+        text="Введите промокод в формате: <код> <скидка%> <дней_действия> <макс_использований|none> <период_подписки|none>",
         reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
     )
     user_main_messages[user_id] = {
@@ -1384,32 +1428,23 @@ async def restart_vpn_callback(callback_query: types.CallbackQuery):
 async def check_payment_status():
     payments = db.get_pending_payments()
     for user_id, payment_id, amount, _ in payments:
-        payment_status = 'completed'  # Замените на реальную проверку
-        if payment_status == 'completed':
-            db.update_payment_status(payment_id, 'completed')
-            pending_payment = user_main_messages.get(user_id, {}).get('pending_payment', {})
-            if pending_payment and pending_payment['payment_id'] == payment_id:
-                period = pending_payment['period']
-                username = f"user_{user_id}_{uuid.uuid4().hex[:8]}"
-                success = db.root_add(username, ipv6=False)
-                if success:
-                    months = {'1_month': 1, '3_months': 3, '6_months': 6, '12_months': 12}[period]
-                    expiration = datetime.now(pytz.UTC) + timedelta(days=30 * months)
-                    db.set_user_expiration(username, expiration, "Неограниченно")
-                    db.set_user_telegram_id(username, user_id)
-                    conf_path = os.path.join('users', username, f'{username}.conf')
-                    if os.path.exists(conf_path):
-                        vpn_key = await generate_vpn_key(conf_path)
-                        caption = f"Ваш VPN ключ ({period.replace('_', ' ')}):\nAmneziaVPN:\n[Google Play](https://play.google.com/store/apps/details?id=org.amnezia.vpn&hl=ru)\n[GitHub](https://github.com/amnezia-vpn/amnezia-client)\n```\n{vpn_key}\n```"
-                        with open(conf_path, 'rb') as config:
-                            config_message = await bot.send_document(user_id, config, caption=caption, parse_mode="Markdown")
-                            await bot.pin_chat_message(user_id, config_message.message_id, disable_notification=True)
-                        await bot.send_message(user_id, "Оплата подтверждена! Ваш VPN ключ отправлен.")
-                    else:
-                        await bot.send_message(user_id, "Ошибка: конфигурация не найдена. Обратитесь к администратору.")
-                else:
-                    await bot.send_message(user_id, "Ошибка при создании пользователя. Обратитесь к администратору.")
-                user_main_messages[user_id].pop('pending_payment', None)
+        try:
+            operation = yoomoney_client.operation_history(label=payment_id)
+            for op in operation.operations:
+                if op.label == payment_id and op.status == "success":
+                    db.update_payment_status(payment_id, 'completed')
+                    pending_payment = user_main_messages.get(user_id, {}).get('pending_payment', {})
+                    if pending_payment and pending_payment['payment_id'] == payment_id:
+                        period = pending_payment['period']
+                        success = await issue_vpn_key(user_id, period)
+                        if success:
+                            await bot.send_message(user_id, "Оплата подтверждена! Ваш VPN ключ отправлен.")
+                        else:
+                            await bot.send_message(user_id, "Ошибка при создании пользователя. Обратитесь к администратору.")
+                        user_main_messages[user_id].pop('pending_payment', None)
+                    break
+        except Exception as e:
+            logger.error(f"Ошибка проверки платежа {payment_id}: {str(e)}")
 
 if __name__ == '__main__':
     import asyncio
