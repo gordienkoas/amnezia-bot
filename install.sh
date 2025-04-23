@@ -231,7 +231,12 @@ setup_python_env() {
 
 # Проверка и создание конфигурации
 check_config() {
-    cd awg || error_exit "Каталог awg не найден"
+    # Проверка и создание каталога awg
+    if [[ ! -d "awg" ]]; then
+        echo -e "${YELLOW}Каталог awg не найден. Создаём...${NC}"
+        mkdir -p awg || error_exit "Не удалось создать каталог awg"
+    fi
+    cd awg || error_exit "Не удалось перейти в каталог awg"
     echo -e "${BLUE}Проверка конфигурации...${NC}"
     if [[ ! -f "files/setting.ini" ]]; then
         echo -e "${YELLOW}Файл setting.ini не найден. Запрашиваем конфигурацию...${NC}"
@@ -268,15 +273,25 @@ set_permissions() {
 
 # Инициализация бота для генерации config
 initialize_bot() {
-    cd awg || error_exit "Каталог awg не найден"
+    # Проверка и создание каталога awg
+    if [[ ! -d "awg" ]]; then
+        echo -e "${YELLOW}Каталог awg не найден. Создаём...${NC}"
+        mkdir -p awg || error_exit "Не удалось создать каталог awg"
+    fi
+    cd awg || error_exit "Не удалось перейти в каталог awg"
     if [[ ! -f "files/setting.ini" ]]; then
-        ../myenv/bin/python3.11 bot_manager.py < /dev/tty &
-        local PID=$!
-        while [[ ! -f "files/setting.ini" ]]; do
-            sleep 2
-            kill -0 "$PID" 2>/dev/null || error_exit "Ошибка инициализации бота"
-        done
-        kill "$PID" && wait "$PID" 2>/dev/null
+        if [[ -f "bot_manager.py" ]]; then
+            ../myenv/bin/python3.11 bot_manager.py < /dev/tty &
+            local PID=$!
+            while [[ ! -f "files/setting.ini" ]]; do
+                sleep 2
+                kill -0 "$PID" 2>/dev/null || error_exit "Ошибка инициализации бота"
+            done
+            kill "$PID" && wait "$PID" 2>/dev/null
+        else
+            echo -e "${RED}Файл bot_manager.py не найден в каталоге awg. Проверьте репозиторий: $REPO_URL${NC}"
+            error_exit "Отсутствует необходимый файл bot_manager.py"
+        fi
     fi
     cd ..
 }
