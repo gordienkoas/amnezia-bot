@@ -22,7 +22,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from yoomoney import Client, Quickpay  # Добавляем YooMoney
+from yoomoney import Client, Quickpay
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -35,12 +35,21 @@ moderator_ids = setting.get('moderator_ids', [])
 wg_config_file = setting.get('wg_config_file')
 docker_container = setting.get('docker_container')
 endpoint = setting.get('endpoint')
-yoomoney_token = setting.get('yoomoney_token')  # Токен YooMoney
-yoomoney_wallet = setting.get('yoomoney_wallet')  # Номер кошелька YooMoney
+yoomoney_token = setting.get('yoomoney_token')
+yoomoney_wallet = setting.get('yoomoney_wallet')
+pricing = setting.get('pricing', {
+    '1_month': 1000.0,
+    '3_months': 2500.0,
+    '6_months': 4500.0,
+    '12_months': 8000.0
+})
 
-if not all([bot_token, admin_ids, wg_config_file, docker_container, endpoint, yoomoney_token, yoomoney_walletseverity=ERROR]):
+if not all([bot_token, admin_ids, wg_config_file, docker_container, endpoint]):
     logger.error("Некоторые обязательные настройки отсутствуют.")
     sys.exit(1)
+
+if not all([yoomoney_token, yoomoney_wallet]):
+    logger.warning("Настройки YooMoney отсутствуют. Установите их через бот.")
 
 admins = [int(admin_id) for admin_id in admin_ids]
 moderators = [int(mod_id) for mod_id in moderator_ids]
@@ -48,15 +57,8 @@ bot = Bot(bot_token)
 WG_CONFIG_FILE = wg_config_file
 DOCKER_CONTAINER = docker_container
 ENDPOINT = endpoint
-yoomoney_client = Client(yoomoney_token)  # Инициализация YooMoney
-
-# Цены за периоды (в рублях для YooMoney)
-PRICING = {
-    '1_month': 1000.0,  # Изменено на рубли
-    '3_months': 2500.0,
-    '6_months': 4500.0,
-    '12_months': 8000.0
-}
+yoomoney_client = Client(yoomoney_token) if yoomoney_token else None
+PRICING = pricing
 
 class AdminMessageDeletionMiddleware(BaseMiddleware):
     async def on_process_message(self, message: types.Message, data: dict):
@@ -68,7 +70,7 @@ scheduler = AsyncIOScheduler(timezone=pytz.UTC)
 scheduler.start()
 dp.middleware.setup(AdminMessageDeletionMiddleware())
 
-# Главное меню (удалены "Список админов", "Добавить админа", "Создать бэкап")
+# Главное меню
 def get_main_menu_markup(user_id):
     markup = InlineKeyboardMarkup(row_width=2)
     if user_id in admins:
@@ -101,7 +103,7 @@ def get_main_menu_markup(user_id):
         )
     return markup
 
-# Меню настроек (добавлены админы и бэкап)
+# Меню настроек
 def get_settings_menu():
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -116,7 +118,38 @@ def get_settings_menu():
         InlineKeyboardButton("👥 Список админов", callback_data="list_admins"),
         InlineKeyboardButton("👤 Добавить админа", callback_data="add_admin")
     )
+    markup.add(
+        InlineKeyboardButton("💸 Настройки YooMoney", callback_data="yoomoney_settings"),
+        InlineKeyboardButton("💰 Настройки цен", callback_data="pricing_settings")
+    )
     markup.add(InlineKeyboardButton("⬅️ Назад", callback_data="home"))
+    return markup
+
+# Меню настроек YooMoney
+def get_yoomoney_settings_menu():
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("🔑 Установить токен", callback_data="set_yoomoney_token"),
+        InlineKeyboardButton("💼 Установить кошелёк", callback_data="set_yoomoney_wallet")
+    )
+    markup.add(InlineKeyboardButton("⬅️ Назад", callback_data="settings"))
+    return markup
+
+# Меню настроек цен
+def get_pricing_settings_menu():
+    markup = InlineKeyboardMarkup(row_width=2)
+    periods = [
+        ("1 месяц", "1_month"),
+        ("3 месяца", "3_months"),
+        ("6 месяцев", "6_months"),
+        ("12 месяцев", "12_months")
+    ]
+    for period_name, period_key in periods:
+        markup.add(InlineKeyboardButton(
+            f"{period_name} - ₽{PRICING.get(period_key, 0):.2f}",
+            callback_data=f"set_price_{period_key}"
+        ))
+    markup.add(InlineKeyboardButton("⬅️ Назад", callback_data="settings"))
     return markup
 
 # Клавиатура для выбора периода продления
@@ -150,7 +183,7 @@ def get_clear_keys_date_keyboard():
 user_main_messages = {}
 isp_cache = {}
 ISP_CACHE_FILE = 'files/isp_cache.json'
-CACHE_TTL = 24 * 3600  # 24 часа в секундах
+CACHE_TTL = 24 * 3600
 
 def get_interface_name():
     return os.path.basename(WG_CONFIG_FILE).split('.')[0]
@@ -228,7 +261,6 @@ def parse_transfer(transfer_str: str) -> tuple:
         return 0, 0
 
 async def generate_vpn_key(conf_path: str) -> str:
-    """Преобразует .conf в формат vpn:// с помощью awg-decode.py."""
     process = await asyncio.create_subprocess_exec(
         'python3.11', '/root/amnezia-bot/awg/awg-decode.py', '--encode', conf_path,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -241,7 +273,6 @@ async def generate_vpn_key(conf_path: str) -> str:
         return ""
 
 async def issue_vpn_key(user_id: int, period: str) -> bool:
-    """Выдача VPN-ключа пользователю."""
     username = f"user_{user_id}_{uuid.uuid4().hex[:8]}"
     success = db.root_add(username, ipv6=False)
     if success:
@@ -251,7 +282,7 @@ async def issue_vpn_key(user_id: int, period: str) -> bool:
         db.set_user_telegram_id(username, user_id)
         conf_path = os.path.join('users', username, f'{username}.conf')
         if os.path.exists(conf_path):
-            vpn_key = await generate_vpn various_key(conf_path)
+            vpn_key = await generate_vpn_key(conf_path)
             caption = f"Ваш VPN ключ ({period.replace('_', ' ')}):\nAmneziaVPN:\n[Google Play](https://play.google.com/store/apps/details?id=org.amnezia.vpn&hl=ru)\n[GitHub](https://github.com/amnezia-vpn/amnezia-client)\n```\n{vpn_key}\n```"
             with open(conf_path, 'rb') as config:
                 config_message = await bot.send_document(user_id, config, caption=caption, parse_mode="Markdown")
@@ -339,13 +370,13 @@ async def handle_messages(message: types.Message):
         if promocode_data:
             discount = promocode_data.get('discount', 0)
             subscription_period = promocode_data.get('subscription_period')
-            if subscription_period:  # Промокод для выдачи ключа
+            if subscription_period:
                 success = await issue_vpn_key(user_id, subscription_period)
                 if success:
                     await message.reply(f"Промокод активирован! VPN ключ на {subscription_period.replace('_', ' ')} выдан.")
                 else:
                     await message.reply("Ошибка при выдаче ключа. Обратитесь к администратору.")
-            else:  # Промокод на скидку
+            else:
                 user_main_messages[user_id]['promocode_discount'] = discount
                 await message.reply(f"Промокод активирован! Скидка: {discount}%")
         else:
@@ -386,6 +417,53 @@ async def handle_messages(message: types.Message):
             'message_id': sent_message.message_id,
             'state': None
         }
+    elif user_state == 'waiting_for_yoomoney_token' and user_id in admins:
+        token = message.text.strip()
+        db.set_yoomoney_config(token=token)
+        global yoomoney_client, yoomoney_token
+        yoomoney_token = token
+        yoomoney_client = Client(yoomoney_token)
+        await message.reply("Токен YooMoney успешно обновлён.")
+        sent_message = await message.answer("Настройки YooMoney:", reply_markup=get_yoomoney_settings_menu())
+        user_main_messages[user_id] = {
+            'chat_id': sent_message.chat.id,
+            'message_id': sent_message.message_id,
+            'state': None
+        }
+    elif user_state == 'waiting_for_yoomoney_wallet' and user_id in admins:
+        wallet = message.text.strip()
+        if not re.match(r'^\d{15,18}$', wallet):
+            await message.reply("Введите корректный номер кошелька YooMoney (15-18 цифр).")
+            return
+        db.set_yoomoney_config(wallet=wallet)
+        global yoomoney_wallet
+        yoomoney_wallet = wallet
+        await message.reply("Номер кошелька YooMoney успешно обновлён.")
+        sent_message = await message.answer("Настройки YooMoney:", reply_markup=get_yoomoney_settings_menu())
+        user_main_messages[user_id] = {
+            'chat_id': sent_message.chat.id,
+            'message_id': sent_message.message_id,
+            'state': None
+        }
+    elif user_state.startswith('waiting_for_price_') and user_id in admins:
+        period = user_state.split('waiting_for_price_')[1]
+        try:
+            price = float(message.text.strip())
+            if price <= 0:
+                raise ValueError("Цена должна быть положительной.")
+            db.set_pricing(period, price)
+            global PRICING
+            PRICING[period] = price
+            await message.reply(f"Цена для {period.replace('_', ' ')} обновлена: ₽{price:.2f}")
+        except:
+            await message.reply("Введите корректное число (например, 1000.00).")
+            return
+        sent_message = await message.answer("Настройки цен:", reply_markup=get_pricing_settings_menu())
+        user_main_messages[user_id] = {
+            'chat_id': sent_message.chat.id,
+            'message_id': sent_message.message_id,
+            'state': None
+        }
 
 @dp.callback_query_handler(lambda c: c.data == "settings")
 async def settings_menu_callback(callback_query: types.CallbackQuery):
@@ -409,6 +487,132 @@ async def settings_menu_callback(callback_query: types.CallbackQuery):
         'chat_id': sent_message.chat.id,
         'message_id': sent_message.message_id,
         'state': None
+    }
+    await callback_query.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "yoomoney_settings")
+async def yoomoney_settings_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    if user_id not in admins:
+        await callback_query.answer("Нет прав.", show_alert=True)
+        return
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Настройки YooMoney:",
+        reply_markup=get_yoomoney_settings_menu()
+    )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
+    await callback_query.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "set_yoomoney_token")
+async def set_yoomoney_token_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    if user_id not in admins:
+        await callback_query.answer("Нет прав.", show_alert=True)
+        return
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Введите токен YooMoney:",
+        reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("⬅️ Назад", callback_data="yoomoney_settings"))
+    )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': 'waiting_for_yoomoney_token'
+    }
+    await callback_query.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "set_yoomoney_wallet")
+async def set_yoomoney_wallet_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    if user_id not in admins:
+        await callback_query.answer("Нет прав.", show_alert=True)
+        return
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Введите номер кошелька YooMoney (15-18 цифр):",
+        reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("⬅️ Назад", callback_data="yoomoney_settings"))
+    )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': 'waiting_for_yoomoney_wallet'
+    }
+    await callback_query.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "pricing_settings")
+async def pricing_settings_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    if user_id not in admins:
+        await callback_query.answer("Нет прав.", show_alert=True)
+        return
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Настройки цен:",
+        reply_markup=get_pricing_settings_menu()
+    )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': None
+    }
+    await callback_query.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith('set_price_'))
+async def set_price_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    if user_id not in admins:
+        await callback_query.answer("Нет прав.", show_alert=True)
+        return
+    period = callback_query.data.split('set_price_')[1]
+    try:
+        await bot.delete_message(
+            chat_id=callback_query.message.chat.id,
+            message_id=callback_query.message.message_id
+        )
+    except:
+        pass
+    sent_message = await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text=f"Введите новую цену для {period.replace('_', ' ')} в рублях (например, 1000.00):",
+        reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("⬅️ Назад", callback_data="pricing_settings"))
+    )
+    user_main_messages[user_id] = {
+        'chat_id': sent_message.chat.id,
+        'message_id': sent_message.message_id,
+        'state': f'waiting_for_price_{period}'
     }
     await callback_query.answer()
 
@@ -1150,13 +1354,13 @@ async def pc_instructions(callback_query: types.CallbackQuery):
 @dp.callback_query_handler(lambda c: c.data == "buy_key")
 async def buy_key_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
-    keyboard = InlineKeyboardMarkup(row_width=2).add(
-        InlineKeyboardButton("1 месяц - ₽1000", callback_data="select_period_1_month"),
-        InlineKeyboardButton("3 месяца - ₽2500", callback_data="select_period_3_months"),
-        InlineKeyboardButton("6 месяцев - ₽4500", callback_data="select_period_6_months"),
-        InlineKeyboardButton("12 месяцев - ₽8000", callback_data="select_period_12_months"),
-        InlineKeyboardButton("🏠 Домой", callback_data="home")
-    )
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    for period, price in PRICING.items():
+        keyboard.add(InlineKeyboardButton(
+            f"{period.replace('_', ' ')} - ₽{price:.2f}",
+            callback_data=f"select_period_{period}"
+        ))
+    keyboard.add(InlineKeyboardButton("🏠 Домой", callback_data="home"))
     try:
         await bot.delete_message(
             chat_id=callback_query.message.chat.id,
@@ -1183,6 +1387,10 @@ async def select_period_callback(callback_query: types.CallbackQuery):
     price = PRICING[period]
     discount = user_main_messages.get(user_id, {}).get('promocode_discount', 0)
     final_price = price * (1 - discount / 100)
+    
+    if not yoomoney_client or not yoomoney_wallet:
+        await callback_query.answer("Платежи недоступны. Обратитесь к администратору.", show_alert=True)
+        return
     
     payment_id = str(uuid.uuid4())
     db.add_payment(user_id, payment_id, final_price, 'pending')
@@ -1250,7 +1458,7 @@ async def use_promocode_callback(callback_query: types.CallbackQuery):
 
 @dp.callback_query_handler(lambda c: c.data == "manage_promocodes")
 async def manage_promocodes_callback(callback_query: types.CallbackQuery):
-    user_id = callback(nameof): callback_query.from_user.id
+    user_id = callback_query.from_user.id
     if user_id not in admins:
         await callback_query.answer("Нет прав.", show_alert=True)
         return
@@ -1429,20 +1637,21 @@ async def check_payment_status():
     payments = db.get_pending_payments()
     for user_id, payment_id, amount, _ in payments:
         try:
-            operation = yoomoney_client.operation_history(label=payment_id)
-            for op in operation.operations:
-                if op.label == payment_id and op.status == "success":
-                    db.update_payment_status(payment_id, 'completed')
-                    pending_payment = user_main_messages.get(user_id, {}).get('pending_payment', {})
-                    if pending_payment and pending_payment['payment_id'] == payment_id:
-                        period = pending_payment['period']
-                        success = await issue_vpn_key(user_id, period)
-                        if success:
-                            await bot.send_message(user_id, "Оплата подтверждена! Ваш VPN ключ отправлен.")
-                        else:
-                            await bot.send_message(user_id, "Ошибка при создании пользователя. Обратитесь к администратору.")
-                        user_main_messages[user_id].pop('pending_payment', None)
-                    break
+            if yoomoney_client:
+                operation = yoomoney_client.operation_history(label=payment_id)
+                for op in operation.operations:
+                    if op.label == payment_id and op.status == "success":
+                        db.update_payment_status(payment_id, 'completed')
+                        pending_payment = user_main_messages.get(user_id, {}).get('pending_payment', {})
+                        if pending_payment and pending_payment['payment_id'] == payment_id:
+                            period = pending_payment['period']
+                            success = await issue_vpn_key(user_id, period)
+                            if success:
+                                await bot.send_message(user_id, "Оплата подтверждена! Ваш VPN ключ отправлен.")
+                            else:
+                                await bot.send_message(user_id, "Ошибка при создании пользователя. Обратитесь к администратору.")
+                            user_main_messages[user_id].pop('pending_payment', None)
+                        break
         except Exception as e:
             logger.error(f"Ошибка проверки платежа {payment_id}: {str(e)}")
 
