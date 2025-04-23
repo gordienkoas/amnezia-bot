@@ -232,10 +232,15 @@ setup_python_env() {
 # Проверка наличия bot_manager.py и настройка структуры
 check_bot_files() {
     echo -e "${BLUE}Проверка наличия bot_manager.py...${NC}"
+    echo -e "${YELLOW}Текущая директория: $(pwd)${NC}"
+    echo -e "${YELLOW}Содержимое корня:${NC}"
+    ls -la
     if [[ ! -d "awg" ]]; then
         echo -e "${YELLOW}Каталог awg не найден. Создаём...${NC}"
         mkdir -p awg || error_exit "Не удалось создать каталог awg"
     fi
+    echo -e "${YELLOW}Содержимое awg:${NC}"
+    ls -la awg
     if [[ -f "awg/bot_manager.py" ]]; then
         echo -e "${GREEN}Найден bot_manager.py в awg${NC}"
     else
