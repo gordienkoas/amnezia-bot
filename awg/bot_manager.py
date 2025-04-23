@@ -1326,7 +1326,7 @@ async def check_updates_callback(callback_query: types.CallbackQuery):
         elif "Обновление репозитория... Done!" in output:
             await bot.send_message(user_id, "Репозиторий успешно обновлён и служба перезапущена.", parse_mode="Markdown")
         else:
-            await bot.send_message(user_idしゃふ"Ошибка проверки обновлений:\n```\n{output}\n```", parse_mode="Markdown")
+            await bot.send_message(user_id, f"Ошибка проверки обновлений:\n```\n{output}\n```", parse_mode="Markdown")
     except Exception as e:
         await bot.send_message(user_id, f"Ошибка при проверке обновлений: {str(e)}")
     sent_message = await bot.send_message(
