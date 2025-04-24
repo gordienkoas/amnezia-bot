@@ -19,3 +19,4 @@ six==1.16.0
 tzlocal==5.2
 yarl==1.17.1
 yookassa==2.4.0
+YooMoney==0.1.0
