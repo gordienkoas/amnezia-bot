@@ -255,7 +255,15 @@ check_bot_files() {
         else
             echo -e "${RED}Файл bot_manager.py не найден ни в awg, ни в корне репозитория${NC}"
             echo -e "${RED}Проверьте содержимое репозитория: $REPO_URL${NC}"
-            error_exit "Отсутствует необходимый файл bot_manager.py"
+            echo -e "${YELLOW}Вы можете указать путь к файлу bot_manager.py или загрузить его в репозиторий.${NC}"
+            read -p "Введите путь к файлу bot_manager.py (оставьте пустым для выхода): " bot_manager_path
+            if [[ -n "$bot_manager_path" && -f "$bot_manager_path" ]]; then
+                echo -e "${YELLOW}Копирую bot_manager.py из $bot_manager_path в awg...${NC}"
+                cp "$bot_manager_path" awg/bot_manager.py || error_exit "Не удалось скопировать bot_manager.py в awg"
+                echo -e "${GREEN}Файл bot_manager.py успешно скопирован в awg${NC}"
+            else
+                error_exit "Файл bot_manager.py не найден по указанному пути или путь не указан"
+            fi
         fi
     fi
 }
@@ -355,7 +363,7 @@ service_control_menu() {
     while true; do
         echo -e "\n${BLUE}Управление службой${NC}"
         systemctl status "$SERVICE_NAME" | grep -E "Active:|Loaded:"
-        echo -e "1) Остановить 2) Перезапустить 3) Переустановить 4) Удалить службу 5) Удалить AmneziaWG 6) Проверить обновления 7) Назад"
+lilik, 6) Проверить обновления 7) Назад"
         echo -ne "${BLUE}Выберите: ${NC}"; read act
         case $act in
             1) run_with_spinner "Остановка" "systemctl stop $SERVICE_NAME" ;;
