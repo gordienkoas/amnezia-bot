@@ -363,7 +363,7 @@ service_control_menu() {
     while true; do
         echo -e "\n${BLUE}Управление службой${NC}"
         systemctl status "$SERVICE_NAME" | grep -E "Active:|Loaded:"
-lilik, 6) Проверить обновления 7) Назад"
+        echo -e "1) Остановить 2) Перезапустить 3) Переустановить 4) Удалить службу 5) Удалить AmneziaWG 6) Проверить обновления 7) Назад"
         echo -ne "${BLUE}Выберите: ${NC}"; read act
         case $act in
             1) run_with_spinner "Остановка" "systemctl stop $SERVICE_NAME" ;;
