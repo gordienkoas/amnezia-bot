@@ -127,9 +127,17 @@ check_script_update() {
 
 # Проверка и применение обновлений
 check_updates() {
-    if [[ ! -d "/root/amnezia-bot/.git" ]]; then
-        echo -e "${RED}Репозиторий не найден. Пожалуйста, установите бот сначала.${NC}"
+    # Проверка наличия git
+    if ! command -v git &>/dev/null; then
+        echo -e "${RED}git не установлен. Установите git для клонирования репозитория.${NC}"
         exit 1
+    fi
+    # Проверка и клонирование репозитория, если он отсутствует
+    if [[ ! -d "/root/amnezia-bot/.git" ]]; then
+        echo -e "${YELLOW}Репозиторий не найден. Клонируем репозиторий...${NC}"
+        cd /root || { echo -e "${RED}Не удалось перейти в /root${NC}"; exit 1; }
+        run_with_spinner "Клонирование репозитория" "git clone $REPO_URL -q"
+        cd amnezia-bot || { echo -e "${RED}Не удалось перейти в каталог amnezia-bot${NC}"; exit 1; }
     fi
     check_github_updates "$1"
 }
