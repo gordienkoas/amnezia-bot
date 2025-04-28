@@ -36,7 +36,7 @@ run_with_spinner() {
     local cmd="$@"
     if [ "$ENABLE_LOGS" = true ]; then
         echo -e "${BLUE}${description}...${NC}"
-        eval "$cmd"
+        eval "$cmd" 2>&1
         local stat=$?
         if [ $stat -eq 0 ]; then echo -e "${GREEN}${description}... Done!${NC}\n"; else echo -e "${RED}${description}... Failed!${NC}\n"; error_exit "$cmd"; fi
     else
@@ -137,14 +137,25 @@ check_script_update() {
 
 # Проверка и применение обновлений
 check_updates() {
-    # Проверка наличия git
-    if ! command -v git &>/dev/null; then
-        echo -e "${RED}git не установлен. Установите git для клонирования репозитория.${NC}"
-        exit 1
+    # Проверка зависимостей
+    for cmd in git curl jq python3.11; do
+        if ! command -v "$cmd" &>/dev/null; then
+            echo -e "${RED}$cmd не установлен. Установите $cmd для продолжения.${NC}"
+            exit 1
+        fi
+    done
+
+    # Проверка доступности репозитория
+    echo -e "${YELLOW}Проверка доступности репозитория...${NC}"
+    if ! curl -s -I "$REPO_URL" | grep -q "HTTP/.* 200"; then
+        error_exit "Репозиторий $REPO_URL недоступен. Проверьте URL или сетевое подключение."
     fi
+
     # Проверка и клонирование репозитория, если он отсутствует
     if [[ ! -d "/root/amnezia-bot/.git" ]]; then
         echo -e "${YELLOW}Репозиторий не найден. Проверяем /root/amnezia-bot...${NC}"
+        echo -e "${YELLOW}Содержимое /root:${NC}"
+        ls -la /root
         if [[ -d "/root/amnezia-bot" ]]; then
             echo -e "${YELLOW}Директория /root/amnezia-bot существует, но не является git-репозиторием. Удаляем её...${NC}"
             rm -rf /root/amnezia-bot || error_exit "Не удалось удалить поврежденную директорию /root/amnezia-bot"
@@ -156,6 +167,8 @@ check_updates() {
         if [[ ! -d ".git" ]]; then
             error_exit "Клонирование репозитория не удалось. Проверьте доступ к $REPO_URL"
         fi
+        echo -e "${YELLOW}Содержимое /root/amnezia-bot после клонирования:${NC}"
+        ls -la
     fi
     check_github_updates "$1"
 }
