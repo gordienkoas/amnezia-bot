@@ -18,6 +18,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT_NAME="$(basename "$0")"
 SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_NAME"
 
+# Проверка прав суперпользователя
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}Этот скрипт должен быть запущен с правами суперпользователя (root)${NC}"
+    exit 1
+fi
+
 # Функция для вывода ошибок и завершения
 error_exit() {
     echo -e "${RED}Ошибка: $1${NC}" >&2
@@ -48,6 +54,10 @@ run_with_spinner() {
 check_github_updates() {
     local current_sha local_sha latest_sha auto_mode="$1"
     cd /root/amnezia-bot || { echo -e "${RED}Каталог amnezia-bot не найден${NC}"; return 1; }
+    
+    echo -e "${YELLOW}Текущая директория: $(pwd)${NC}"
+    echo -e "${YELLOW}Содержимое /root/amnezia-bot:${NC}"
+    ls -la
     
     # Получение текущего SHA коммита
     local_sha=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
@@ -134,10 +144,18 @@ check_updates() {
     fi
     # Проверка и клонирование репозитория, если он отсутствует
     if [[ ! -d "/root/amnezia-bot/.git" ]]; then
-        echo -e "${YELLOW}Репозиторий не найден. Клонируем репозиторий...${NC}"
-        cd /root || { echo -e "${RED}Не удалось перейти в /root${NC}"; exit 1; }
-        run_with_spinner "Клонирование репозитория" "git clone $REPO_URL -q"
-        cd amnezia-bot || { echo -e "${RED}Не удалось перейти в каталог amnezia-bot${NC}"; exit 1; }
+        echo -e "${YELLOW}Репозиторий не найден. Проверяем /root/amnezia-bot...${NC}"
+        if [[ -d "/root/amnezia-bot" ]]; then
+            echo -e "${YELLOW}Директория /root/amnezia-bot существует, но не является git-репозиторием. Удаляем её...${NC}"
+            rm -rf /root/amnezia-bot || error_exit "Не удалось удалить поврежденную директорию /root/amnezia-bot"
+        fi
+        echo -e "${YELLOW}Клонируем репозиторий...${NC}"
+        cd /root || error_exit "Не удалось перейти в /root"
+        run_with_spinner "Клонирование репозитория" "git clone $REPO_URL"
+        cd amnezia-bot || error_exit "Не удалось перейти в каталог amnezia-bot"
+        if [[ ! -d ".git" ]]; then
+            error_exit "Клонирование репозитория не удалось. Проверьте доступ к $REPO_URL"
+        fi
     fi
     check_github_updates "$1"
 }
