@@ -1,3 +1,4 @@
+import configparser
 import json
 import os
 import subprocess
@@ -9,11 +10,12 @@ import shutil
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-CONFIG_FILE = 'files/config.json'
-USER_EXPIRATION_FILE = 'files/user_expiration.json'
-USER_TELEGRAM_FILE = 'files/user_telegram.json'
-PROMOCODES_FILE = 'files/promocodes.json'
-PAYMENTS_FILE = 'files/payments.json'
+BASE_DIR = "/root/amnezia-bot/awg"
+CONFIG_FILE = os.path.join(BASE_DIR, "files", "setting.ini")
+USER_EXPIRATION_FILE = os.path.join(BASE_DIR, "files", "user_expiration.json")
+USER_TELEGRAM_FILE = os.path.join(BASE_DIR, "files", "user_telegram.json")
+PROMOCODES_FILE = os.path.join(BASE_DIR, "files", "promocodes.json")
+PAYMENTS_FILE = os.path.join(BASE_DIR, "files", "payments.json")
 
 def load_json(file_path, default=None):
     """Загружает JSON-файл, возвращает default при ошибке или отсутствии файла."""
@@ -37,27 +39,57 @@ def save_json(file_path, data):
         return False
 
 def get_config():
-    """Возвращает конфигурацию из config.json."""
-    return load_json(CONFIG_FILE, {})
+    """Возвращает конфигурацию из setting.ini."""
+    config = configparser.ConfigParser()
+    try:
+        config.read(CONFIG_FILE)
+        if 'Settings' not in config:
+            logger.error(f"Секция [Settings] не найдена в {CONFIG_FILE}")
+            return {}
+        settings = dict(config['Settings'])
+        # Преобразование pricing из JSON-строки в словарь
+        if 'pricing' in settings:
+            try:
+                settings['pricing'] = json.loads(settings['pricing'])
+            except json.JSONDecodeError:
+                logger.error("Ошибка парсинга pricing в setting.ini")
+                settings['pricing'] = {}
+        return settings
+    except Exception as e:
+        logger.error(f"Ошибка чтения {CONFIG_FILE}: {str(e)}")
+        return {}
 
 def add_admin(admin_id):
     """Добавляет ID администратора в конфигурацию."""
     config = get_config()
-    admin_ids = config.get('admin_ids', [])
-    if str(admin_id) not in admin_ids:
-        admin_ids.append(str(admin_id))
-        config['admin_ids'] = admin_ids
-        save_json(CONFIG_FILE, config)
+    admin_ids = config.get('admin_ids', '').split(',') if config.get('admin_ids') else []
+    admin_id_str = str(admin_id)
+    if admin_id_str not in admin_ids:
+        admin_ids.append(admin_id_str)
+        config['admin_ids'] = ','.join([aid for aid in admin_ids if aid])
+        config_parser = configparser.ConfigParser()
+        config_parser['Settings'] = config
+        try:
+            with open(CONFIG_FILE, 'w') as configfile:
+                config_parser.write(configfile)
+        except Exception as e:
+            logger.error(f"Ошибка сохранения admin_ids в {CONFIG_FILE}: {str(e)}")
 
 def remove_admin(admin_id):
     """Удаляет ID администратора из конфигурации."""
     config = get_config()
-    admin_ids = config.get('admin_ids', [])
+    admin_ids = config.get('admin_ids', '').split(',') if config.get('admin_ids') else []
     admin_id_str = str(admin_id)
     if admin_id_str in admin_ids:
         admin_ids.remove(admin_id_str)
-        config['admin_ids'] = admin_ids
-        save_json(CONFIG_FILE, config)
+        config['admin_ids'] = ','.join([aid for aid in admin_ids if aid])
+        config_parser = configparser.ConfigParser()
+        config_parser['Settings'] = config
+        try:
+            with open(CONFIG_FILE, 'w') as configfile:
+                config_parser.write(configfile)
+        except Exception as e:
+            logger.error(f"Ошибка сохранения admin_ids в {CONFIG_FILE}: {str(e)}")
 
 def set_yoomoney_config(token=None, wallet=None):
     """Обновляет настройки YooMoney в конфигурации."""
@@ -66,22 +98,35 @@ def set_yoomoney_config(token=None, wallet=None):
         config['yoomoney_token'] = token
     if wallet:
         config['yoomoney_wallet'] = wallet
-    save_json(CONFIG_FILE, config)
+    config_parser = configparser.ConfigParser()
+    config_parser['Settings'] = config
+    try:
+        with open(CONFIG_FILE, 'w') as configfile:
+            config_parser.write(configfile)
+    except Exception as e:
+        logger.error(f"Ошибка сохранения YooMoney настроек в {CONFIG_FILE}: {str(e)}")
 
 def set_pricing(period, price):
     """Устанавливает цену для указанного периода подписки."""
     config = get_config()
-    config['pricing'] = config.get('pricing', {})
-    config['pricing'][period] = price
-    save_json(CONFIG_FILE, config)
+    pricing = config.get('pricing', {})
+    pricing[period] = float(price)
+    config['pricing'] = json.dumps(pricing)  # Сохраняем как JSON-строку
+    config_parser = configparser.ConfigParser()
+    config_parser['Settings'] = config
+    try:
+        with open(CONFIG_FILE, 'w') as configfile:
+            config_parser.write(configfile)
+    except Exception as e:
+        logger.error(f"Ошибка сохранения pricing в {CONFIG_FILE}: {str(e)}")
 
 def root_add(name, ipv6=False):
     """Добавляет нового пользователя через newclient.sh."""
     try:
-        cmd = ['./newclient.sh', name]
+        cmd = [os.path.join(BASE_DIR, 'newclient.sh'), name]
         if not ipv6:
             cmd.append('--no-ipv6')
-        process = subprocess.run(cmd, capture_output=True, text=True)
+        process = subprocess.run(cmd, capture_output=True, text=True, cwd=BASE_DIR)
         if process.returncode == 0:
             return True
         logger.error(f"Ошибка добавления пользователя {name}: {process.stderr}")
@@ -93,7 +138,7 @@ def root_add(name, ipv6=False):
 def deactive_user_db(name):
     """Деактивирует пользователя через removeclient.sh."""
     try:
-        process = subprocess.run(['./removeclient.sh', name], capture_output=True, text=True)
+        process = subprocess.run([os.path.join(BASE_DIR, 'removeclient.sh'), name], capture_output=True, text=True, cwd=BASE_DIR)
         if process.returncode == 0:
             return True
         logger.error(f"Ошибка удаления пользователя {name}: {process.stderr}")
@@ -105,7 +150,7 @@ def deactive_user_db(name):
 def get_client_list():
     """Возвращает список клиентов (имя и конфигурация)."""
     clients = []
-    users_dir = 'users'
+    users_dir = os.path.join(BASE_DIR, 'users')
     if os.path.exists(users_dir):
         for user_dir in os.listdir(users_dir):
             user_path = os.path.join(users_dir, user_dir)
@@ -120,17 +165,16 @@ def get_client_list():
 def get_active_list():
     """Возвращает список активных клиентов с последним handshake."""
     active = []
-    users_dir = 'users'
-    if os.path.exists(users_dir):
-        for user_dir in os.listdir(users_dir):
-            user_path = os.path.join(users_dir, user_dir)
-            if os.path.isdir(user_path):
-                status_file = os.path.join(user_path, 'status.json')
-                if os.path.exists(status_file):
-                    with open(status_file, 'r') as f:
-                        status = json.load(f)
-                    last_handshake = status.get('last_handshake', 'never')
-                    active.append((user_dir, last_handshake))
+    try:
+        result = subprocess.run(['wg', 'show', 'wg0', 'latest-handshakes'], capture_output=True, text=True)
+        lines = result.stdout.strip().split('\n')
+        for line in lines:
+            if line:
+                parts = line.split()
+                if len(parts) >= 2:
+                    active.append((parts[0], datetime.fromtimestamp(int(parts[1])).strftime('%Y-%m-%d %H:%M:%S')))
+    except Exception as e:
+        logger.error(f"Ошибка получения активных клиентов: {str(e)}")
     return active
 
 def set_user_expiration(username, expiration, transfer_limit):
@@ -173,7 +217,7 @@ def add_promocode(code, discount, expires_at, max_uses, subscription_period):
     if code in promocodes:
         return False
     promocodes[code] = {
-        'discount': discount,
+        'discount': float(discount),
         'expires_at': expires_at.isoformat() if expires_at else None,
         'max_uses': max_uses,
         'uses': 0,
@@ -228,7 +272,7 @@ def add_payment(user_id, payment_id, amount, status, period=None):
     payments = load_json(PAYMENTS_FILE, {})
     payments[payment_id] = {
         'user_id': user_id,
-        'amount': amount,
+        'amount': float(amount),
         'status': status,
         'period': period,
         'created_at': datetime.now(pytz.utc).isoformat()
