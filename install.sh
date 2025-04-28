@@ -239,20 +239,22 @@ setup_python_env() {
 check_bot_files() {
     cd "$AWG_DIR" || error_exit "Каталог $AWG_DIR не найден"
     echo -e "${BLUE}Проверка наличия bot_manager.py...${NC}"
-    if [[ ! -d "awg" ]]; then
-        echo -e "${YELLOW}Каталог awg не найден. Создаём...${NC}"
-        mkdir -p awg || error_exit "Не удалось создать каталог awg"
+    if [[ ! -f "bot_manager.py" ]]; then
+        error_exit "Файл bot_manager.py не найден в $AWG_DIR. Проверьте репозиторий: $REPO_URL"
     fi
-    if [[ -f "bot_manager.py" ]]; then
-        echo -e "${YELLOW}Найден bot_manager.py в корне. Перемещаем в awg...${NC}"
-        mv bot_manager.py awg/ || error_exit "Не удалось переместить bot_manager.py в awg"
-        for file in db.py awg-decode.py newclient.sh removeclient.sh; do
-            [[ -f "$file" ]] && mv "$file" awg/ || echo -e "${YELLOW}Не удалось переместить $file в awg${NC}"
-        done
+    # Проверка наличия других необходимых файлов
+    for file in db.py awg-decode.py newclient.sh removeclient.sh; do
+        [[ -f "$file" ]] || echo -e "${YELLOW}Файл $file не найден в $AWG_DIR${NC}"
+    done
+    # Создание каталога files, если отсутствует
+    mkdir -p files || error_exit "Не удалось создать каталог files"
+    # Проверка и перемещение файлов из awg/awg, если они там
+    if [[ -d "awg" ]]; then
+        echo -e "${YELLOW}Обнаружен подкаталог awg. Перемещаем файлы в $AWG_DIR...${NC}"
+        mv awg/* . 2>/dev/null || echo -e "${YELLOW}Не удалось переместить некоторые файлы из awg${NC}"
+        rmdir awg 2>/dev/null || echo -e "${YELLOW}Не удалось удалить пустой подкаталог awg${NC}"
     fi
-    if [[ ! -f "awg/bot_manager.py" ]]; then
-        error_exit "Файл bot_manager.py не найден в $AWG_DIR/awg. Проверьте репозиторий: $REPO_URL"
-    fi
+    echo -e "${GREEN}Проверка файлов завершена${NC}"
 }
 
 # Проверка и создание конфигурации
@@ -311,6 +313,8 @@ EOF
 set_permissions() {
     cd "$AWG_DIR" || error_exit "Каталог $AWG_DIR не найден"
     find . -type f -name "*.sh" -exec chmod +x {} \; || error_exit "Не удалось установить права на скрипты"
+    chmod 644 bot_manager.py db.py awg-decode.py 2>/dev/null || echo -e "${YELLOW}Не удалось установить права на Python-файлы${NC}"
+    chmod 600 files/* 2>/dev/null || echo -e "${YELLOW}Не удалось установить права на файлы в files${NC}"
 }
 
 # Инициализация бота для генерации config
