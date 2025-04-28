@@ -11,11 +11,10 @@ import uuid
 import pytz
 import zipfile
 import shutil
-from aiogram import Bot, types
-from aiogram.dispatcher import Dispatcher
-from aiogram.dispatcher.middlewares import BaseMiddleware
-from aiogram.utils import executor
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram import BaseMiddleware
 from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -63,7 +62,8 @@ except ValueError as e:
     logger.error(f"Ошибка преобразования admin_ids или moderator_ids: {str(e)}")
     sys.exit(1)
 
-bot = Bot(bot_token)
+bot = Bot(token=bot_token)
+dp = Dispatcher()
 WG_CONFIG_FILE = wg_config_file
 DOCKER_CONTAINER = docker_container
 ENDPOINT = endpoint
@@ -71,14 +71,14 @@ yoomoney_client = Client(yoomoney_token) if yoomoney_token else None
 PRICING = pricing
 
 class AdminMessageDeletionMiddleware(BaseMiddleware):
-    async def on_process_message(self, message: types.Message, data: dict):
-        if message.from_user.id in admins and message.text.startswith('/'):
-            asyncio.create_task(delete_message_after_delay(message.chat.id, message.message_id))
+    async def __call__(self, handler, event, data):
+        if isinstance(event, types.Message) and event.from_user.id in admins and event.text.startswith('/'):
+            asyncio.create_task(delete_message_after_delay(event.chat.id, event.message_id))
+        return await handler(event, data)
 
-dp = Dispatcher(bot)
 scheduler = AsyncIOScheduler(timezone=pytz.utc)
 scheduler.start()
-dp.middleware.setup(AdminMessageDeletionMiddleware())
+dp.message.middleware(AdminMessageDeletionMiddleware())
 
 # Вспомогательная функция для обновления сообщений
 async def update_user_message(user_id, chat_id, text, reply_markup, old_message_id=None, state=None):
@@ -246,7 +246,7 @@ async def issue_vpn_key(user_id: int, period: str) -> bool:
         logger.error(f"Ошибка в issue_vpn_key для user_id {user_id}: {str(e)}")
         return False
 
-@dp.message_handler(commands=['start', 'help'])
+@dp.message(Command(commands=['start', 'help']))
 async def start_command_handler(message: types.Message):
     user_id = message.from_user.id
     await update_user_message(
@@ -257,7 +257,7 @@ async def start_command_handler(message: types.Message):
         old_message_id=user_main_messages.get(user_id, {}).get('message_id')
     )
 
-@dp.message_handler(commands=['add_admin'])
+@dp.message(Command(commands=['add_admin']))
 async def add_admin_command(message: types.Message):
     if message.from_user.id not in admins:
         await message.answer("У вас нет прав.")
@@ -281,7 +281,7 @@ async def add_admin_command(message: types.Message):
         old_message_id=message.message_id
     )
 
-@dp.message_handler()
+@dp.message()
 async def handle_messages(message: types.Message):
     global PRICING
     user_id = message.from_user.id
@@ -455,7 +455,7 @@ async def handle_messages(message: types.Message):
             state=None
         )
 
-@dp.callback_query_handler(lambda c: c.data == "settings")
+@dp.callback_query(lambda c: c.data == "settings")
 async def settings_menu_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins:
@@ -470,7 +470,7 @@ async def settings_menu_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "yoomoney_settings")
+@dp.callback_query(lambda c: c.data == "yoomoney_settings")
 async def yoomoney_settings_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins:
@@ -485,7 +485,7 @@ async def yoomoney_settings_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "set_yoomoney_token")
+@dp.callback_query(lambda c: c.data == "set_yoomoney_token")
 async def set_yoomoney_token_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins:
@@ -501,7 +501,7 @@ async def set_yoomoney_token_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "set_yoomoney_wallet")
+@dp.callback_query(lambda c: c.data == "set_yoomoney_wallet")
 async def set_yoomoney_wallet_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins:
@@ -517,7 +517,7 @@ async def set_yoomoney_wallet_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "pricing_settings")
+@dp.callback_query(lambda c: c.data == "pricing_settings")
 async def pricing_settings_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins:
@@ -532,7 +532,7 @@ async def pricing_settings_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data.startswith('set_price_'))
+@dp.callback_query(lambda c: c.data.startswith('set_price_'))
 async def set_price_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins:
@@ -549,7 +549,7 @@ async def set_price_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "add_user")
+@dp.callback_query(lambda c: c.data == "add_user")
 async def prompt_for_user_name(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins and user_id not in moderators:
@@ -565,7 +565,7 @@ async def prompt_for_user_name(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "add_admin")
+@dp.callback_query(lambda c: c.data == "add_admin")
 async def prompt_for_admin_id(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins:
@@ -581,7 +581,7 @@ async def prompt_for_admin_id(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data.startswith('client_'))
+@dp.callback_query(lambda c: c.data.startswith('client_'))
 async def client_selected_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins and user_id not in moderators:
@@ -645,7 +645,7 @@ async def client_selected_callback(callback_query: types.CallbackQuery):
         )
         await callback_query.answer("Ошибка на сервере.", show_alert=True)
 
-@dp.callback_query_handler(lambda c: c.data == "list_users")
+@dp.callback_query(lambda c: c.data == "list_users")
 async def list_users_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins and user_id not in moderators:
@@ -700,7 +700,7 @@ async def list_users_callback(callback_query: types.CallbackQuery):
         )
         await callback_query.answer("Ошибка на сервере.", show_alert=True)
 
-@dp.callback_query_handler(lambda c: c.data == "list_admins")
+@dp.callback_query(lambda c: c.data == "list_admins")
 async def list_admins_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins:
@@ -719,7 +719,7 @@ async def list_admins_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data.startswith('remove_admin_'))
+@dp.callback_query(lambda c: c.data.startswith('remove_admin_'))
 async def remove_admin_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins:
@@ -734,7 +734,7 @@ async def remove_admin_callback(callback_query: types.CallbackQuery):
     await bot.send_message(admin_id, "Вы удалены из администраторов.")
     await list_admins_callback(callback_query)
 
-@dp.callback_query_handler(lambda c: c.data.startswith('delete_user_'))
+@dp.callback_query(lambda c: c.data.startswith('delete_user_'))
 async def client_delete_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins and user_id not in moderators:
@@ -763,7 +763,7 @@ async def client_delete_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data.startswith('renew_user_'))
+@dp.callback_query(lambda c: c.data.startswith('renew_user_'))
 async def renew_user_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins:
@@ -779,7 +779,7 @@ async def renew_user_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data.startswith('renew_period_'))
+@dp.callback_query(lambda c: c.data.startswith('renew_period_'))
 async def renew_period_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins:
@@ -824,7 +824,7 @@ async def renew_period_callback(callback_query: types.CallbackQuery):
         )
         await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "home")
+@dp.callback_query(lambda c: c.data == "home")
 async def return_home(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     await update_user_message(
@@ -836,7 +836,7 @@ async def return_home(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "get_config")
+@dp.callback_query(lambda c: c.data == "get_config")
 async def list_users_for_config(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins and user_id not in moderators:
@@ -860,7 +860,7 @@ async def list_users_for_config(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data.startswith('send_config_'))
+@dp.callback_query(lambda c: c.data.startswith('send_config_'))
 async def send_user_config(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins and user_id not in moderators:
@@ -885,7 +885,7 @@ async def send_user_config(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "create_backup")
+@dp.callback_query(lambda c: c.data == "create_backup")
 async def create_backup_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins:
@@ -921,7 +921,7 @@ async def create_backup_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "buy_key")
+@dp.callback_query(lambda c: c.data == "buy_key")
 async def buy_key_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     await update_user_message(
@@ -933,7 +933,7 @@ async def buy_key_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "select_subscription_period")
+@dp.callback_query(lambda c: c.data == "select_subscription_period")
 async def select_period_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     keyboard = InlineKeyboardMarkup(row_width=2)
@@ -955,7 +955,7 @@ async def select_period_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data.startswith('confirm_period_'))
+@dp.callback_query(lambda c: c.data.startswith('confirm_period_'))
 async def confirm_period_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     period = callback_query.data.split('confirm_period_')[1]
@@ -1004,7 +1004,7 @@ async def confirm_period_callback(callback_query: types.CallbackQuery):
         logger.error(f"Ошибка при создании платежа для user_id {user_id}: {str(e)}")
         await callback_query.answer("Ошибка при создании платежа.", show_alert=True)
 
-@dp.callback_query_handler(lambda c: c.data == "enter_promocode_for_buy")
+@dp.callback_query(lambda c: c.data == "enter_promocode_for_buy")
 async def enter_promocode_for_buy_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     await update_user_message(
@@ -1017,7 +1017,7 @@ async def enter_promocode_for_buy_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "reset_promocode")
+@dp.callback_query(lambda c: c.data == "reset_promocode")
 async def reset_promocode_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if 'promocode_discount' in user_main_messages.get(user_id, {}):
@@ -1031,7 +1031,7 @@ async def reset_promocode_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "use_promocode")
+@dp.callback_query(lambda c: c.data == "use_promocode")
 async def use_promocode_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     await update_user_message(
@@ -1044,7 +1044,7 @@ async def use_promocode_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "manage_promocodes")
+@dp.callback_query(lambda c: c.data == "manage_promocodes")
 async def manage_promocodes_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins:
@@ -1069,7 +1069,7 @@ async def manage_promocodes_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "add_promocode")
+@dp.callback_query(lambda c: c.data == "add_promocode")
 async def add_promocode_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins:
@@ -1085,7 +1085,7 @@ async def add_promocode_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data == "delete_promocode")
+@dp.callback_query(lambda c: c.data == "delete_promocode")
 async def delete_promocode_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins:
@@ -1105,7 +1105,7 @@ async def delete_promocode_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data.startswith('remove_promocode_'))
+@dp.callback_query(lambda c: c.data.startswith('remove_promocode_'))
 async def remove_promocode_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     if user_id not in admins:
@@ -1141,5 +1141,11 @@ async def check_pending_payments():
 
 scheduler.add_job(check_pending_payments, IntervalTrigger(minutes=5))
 
+async def main():
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
+
 if __name__ == '__main__':
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())
