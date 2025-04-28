@@ -76,7 +76,11 @@ check_github_updates() {
         run_with_spinner "Обновление репозитория" "git pull"
         echo "$latest_sha" > "$LOCAL_VERSION_FILE"
         check_script_update
-        run_with_spinner "Обновление Python-зависимостей" "source myenv/bin/activate && pip install aiogram==2.25.1 aiohttp==3.8.6 apscheduler==3.10.4 humanize==4.9.0 pytz==2023.3.post1 && deactivate"
+        # Проверка и создание виртуального окружения, если отсутствует
+        if [[ ! -d "myenv" ]]; then
+            run_with_spinner "Создание виртуального окружения" "python3.11 -m venv myenv"
+        fi
+        run_with_spinner "Обновление Python-зависимостей" "source myenv/bin/activate && pip install --upgrade pip && pip install aiogram==2.25.1 aiohttp==3.8.6 apscheduler==3.10.4 humanize==4.9.0 pytz==2023.3.post1 && deactivate"
         run_with_spinner "Перезапуск службы" "systemctl restart $SERVICE_NAME"
     else
         echo -ne "${BLUE}1) Установить 2) Отменить: ${NC}"; read choice
@@ -88,7 +92,11 @@ check_github_updates() {
             run_with_spinner "Обновление репозитория" "git pull"
             echo "$latest_sha" > "$LOCAL_VERSION_FILE"
             check_script_update
-            run_with_spinner "Обновление Python-зависимостей" "source myenv/bin/activate && pip install aiogram==2.25.1 aiohttp==3.8.6 apscheduler==3.10.4 humanize==4.9.0 pytz==2023.3.post1 && deactivate"
+            # Проверка и создание виртуального окружения, если отсутствует
+            if [[ ! -d "myenv" ]]; then
+                run_with_spinner "Создание виртуального окружения" "python3.11 -m venv myenv"
+            fi
+            run_with_spinner "Обновление Python-зависимостей" "source myenv/bin/activate && pip install --upgrade pip && pip install aiogram==2.25.1 aiohttp==3.8.6 apscheduler==3.10.4 humanize==4.9.0 pytz==2023.3.post1 && deactivate"
             run_with_spinner "Перезапуск службы" "systemctl restart $SERVICE_NAME"
         else
             echo -e "${YELLOW}Обновление отменено${NC}"
