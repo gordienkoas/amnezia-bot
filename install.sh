@@ -137,8 +137,17 @@ check_script_update() {
 
 # Проверка и применение обновлений
 check_updates() {
-    # Проверка зависимостей
-    for cmd in git curl jq python3.11; do
+    # Проверка и установка jq, если отсутствует
+    if ! command -v jq &>/dev/null; then
+        echo -e "${YELLOW}jq не установлен. Устанавливаем jq...${NC}"
+        run_with_spinner "Установка jq" "apt-get update -qq && apt-get install -y jq -qq"
+        if ! command -v jq &>/dev/null; then
+            error_exit "Не удалось установить jq"
+        fi
+    fi
+
+    # Проверка остальных зависимостей
+    for cmd in git curl python3.11; do
         if ! command -v "$cmd" &>/dev/null; then
             echo -e "${RED}$cmd не установлен. Установите $cmd для продолжения.${NC}"
             exit 1
