@@ -1,0 +1,14 @@
+{
+    "bot_token": "YOUR_BOT_TOKEN_HERE",
+    "admin_ids": [123456789],
+    "moderator_ids": [],
+    "wg_config_file": "/path/to/wg0.conf",
+    "docker_container": "amnezia-vpn",
+    "endpoint": "your-server-ip",
+    "pricing": {
+        "1_month": 1000.0,
+        "3_months": 2500.0,
+        "6_months": 4500.0,
+        "12_months": 8000.0
+    }
+}
